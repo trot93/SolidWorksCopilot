@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+	<Prefer32Bit>false</Prefer32Bit>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+	<PackageReference Include="System.ValueTuple" Version="4.5.0" />
+    <PackageReference Include="System.Data.SQLite.Core" Version="1.0.118" />
+  </ItemGroup>
+  <ItemGroup>
+    <!--
+      FIX: System.Net.Http is not auto-included in .NET 4.8 SDK-style projects.
+      HttpClient lives here — without this reference AiClient.cs fails to compile.
+    -->
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
+  <ItemGroup>
+    <!--
+      FIX: Replaced CopilotAddIn reference with CopilotModels.
+      CopilotCore was referencing CopilotAddIn only to get WorkspaceContext/MaterialInfo,
+      while CopilotAddIn referenced CopilotCore for AiClient/SessionLogger.
+      That circular dependency prevented MSBuild from building either project.
+      Both now reference CopilotModels which has no dependencies on either.
+    -->
+    <ProjectReference Include="..\CopilotModels\CopilotModels.csproj" />
+  </ItemGroup>
+</Project>

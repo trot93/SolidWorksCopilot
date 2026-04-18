@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+	<Prefer32Bit>false</Prefer32Bit>	  
+  </PropertyGroup>
+  <ItemGroup>
+    <!--
+      Only Newtonsoft.Json is needed here — these are pure data models.
+      No SOLIDWORKS interop. No SQLite. No HTTP.
+      This project has zero dependencies on the other three projects,
+      which is the entire point — it breaks the circular reference.
+    -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,79 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <!--
+      FIX: Added UseWindowsForms.
+      TaskPaneManager uses System.Windows.Forms.UserControl and ElementHost (WinForms/WPF bridge).
+      Without this, the build succeeds but the TaskPane crashes at runtime with a missing assembly error.
+    -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <PlatformTarget>x64</PlatformTarget>
+	<Prefer32Bit>false</Prefer32Bit>	  
+	<LangVersion>8.0</LangVersion>	  
+  </PropertyGroup>
+  <ItemGroup>
+    <None Remove="copilot_icon.bmp" />
+    <None Remove="copilot_icon_20.bmp" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="copilot_icon.bmp">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="copilot_icon_20.bmp">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      NOTE: These paths point to the default SOLIDWORKS installation directory.
+      If your SOLIDWORKS is installed elsewhere, update these HintPaths before first build.
+    -->
+    <Reference Include="SolidWorks.Interop.sldworks">
+      <HintPath>C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\api\redist\SolidWorks.Interop.sldworks.dll</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+    </Reference>
+	<Reference Include="Microsoft.CSharp" />
+	<Reference Include="SolidWorks.Interop.swpublished">
+	  <HintPath>C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\api\redist\SolidWorks.Interop.swpublished.dll</HintPath>
+	  <EmbedInteropTypes>false</EmbedInteropTypes>
+	</Reference>  
+    <Reference Include="SolidWorks.Interop.swconst">
+      <HintPath>C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\api\redist\SolidWorks.Interop.swconst.dll</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+    </Reference>
+    <!--
+      NOTE: SolidWorksTools must NOT use EmbedInteropTypes — it contains non-interop types
+      (ITaskpaneView, frame helpers) that need to load from the DLL at runtime.
+    -->
+    <Reference Include="SolidWorksTools">
+      <HintPath>C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\SolidWorksTools.dll</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+    </Reference>
+    <Reference Include="Microsoft.VisualBasic" />
+    <Reference Include="System.Net.Http" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+	<PackageReference Include="System.ValueTuple" Version="4.5.0" />
+    <PackageReference Include="System.Data.SQLite.Core" Version="1.0.118" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Clean dependency graph — no circular references:
+        CopilotModels  (no deps — shared data models)
+        CopilotCore    (references CopilotModels)
+        CopilotAddIn   (references CopilotModels + CopilotCore + CopilotUI)
+        CopilotUI      (references CopilotModels + CopilotCore)
+    -->
+    <ProjectReference Include="..\CopilotModels\CopilotModels.csproj" />
+    <ProjectReference Include="..\CopilotCore\CopilotCore.csproj" />
+	<ProjectReference Include="..\CopilotUI\CopilotUI.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="copilot_icon.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+</Project>
