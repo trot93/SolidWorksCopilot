@@ -1,4 +1,4 @@
-<img width="1918" height="1018" alt="image" src="https://github.com/user-attachments/assets/34fe3c12-5fa6-4619-b087-31b9fba9f32f" />
+<img width="1918" height="1020" alt="image" src="https://github.com/user-attachments/assets/05455a63-cca2-44f5-adfa-18071d0b87b6" />
 
 ## Roadmap
 
