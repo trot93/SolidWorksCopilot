@@ -7,12 +7,16 @@ using CopilotModels;
 
 namespace CopilotAddIn
 {
-    /// <summary>
-    /// Native WinForms overlay for clarification Q&A — visually matches
-    /// MainTaskPane pixel-for-pixel: same colors, typography, spacing, radii.
-    /// Parented via SetParent so TextBoxes receive keyboard focus without
-    /// SOLIDWORKS stealing it.
-    /// </summary>
+    public class DoubleBufferedPanel : Panel
+    {
+        public DoubleBufferedPanel()
+        {
+            this.SetStyle(ControlStyles.AllPaintingInWmPaint |
+                          ControlStyles.OptimizedDoubleBuffer |
+                          ControlStyles.UserPaint, true);
+        }
+    }
+
     public class ClarificationInputOverlay : Form
     {
         public event EventHandler AnswersSubmitted;
@@ -20,26 +24,27 @@ namespace CopilotAddIn
 
         private readonly ClarificationQuestion[] _questions;
         private readonly List<TextBox> _answerBoxes = new List<TextBox>();
-        private readonly List<Panel> _questionCards = new List<Panel>();
         private Button _submitBtn;
+        private Panel _scrollPanel;       // inner scrollable panel
+        private int _calculatedHeight;
 
-        // ── MainTaskPane color system (exact match) ──────────────────────────
-        private static readonly Color ColBackground    = Color.FromArgb(248, 248, 245); // #F8F8F5
-        private static readonly Color ColCardBg        = Color.White;
-        private static readonly Color ColBorder        = Color.FromArgb(218, 218, 213); // #DADAD5
-        private static readonly Color ColTextPri       = Color.FromArgb(25, 25, 25);    // #191919
-        private static readonly Color ColTextSec       = Color.FromArgb(150, 150, 146); // #969692
-        private static readonly Color ColTextHint      = Color.FromArgb(180, 180, 178); // placeholder
-        private static readonly Color ColAccent        = Color.FromArgb(24, 95, 165);   // #185FA5
-        private static readonly Color ColAccentHover   = Color.FromArgb(12, 68, 124);   // #0C447C
-        private static readonly Color ColAccentBg      = Color.FromArgb(230, 241, 251); // #E6F1FB
-        private static readonly Color ColAccentText    = Color.FromArgb(12, 68, 124);   // #0C447C
-        private static readonly Color ColSurface       = Color.FromArgb(241, 239, 232); // #F1EFE8 (status bar)
-        private static readonly Color ColInputBg       = Color.FromArgb(248, 248, 245); // same as bg
-        private static readonly Color ColGhostText     = Color.FromArgb(100, 100, 96);  // #646460
-        private static readonly Color ColGhostHover    = Color.FromArgb(235, 235, 232); // #EBEBE8
-        private static readonly int    CornerRadius    = 8;
-        private static readonly int    CardPad         = 12;
+        public int PreferredHeight => _calculatedHeight;
+
+        // ── Colors ────────────────────────────────────────────────────────────
+        private static readonly Color ColBackground = Color.FromArgb(248, 248, 245);
+        private static readonly Color ColCardBg = Color.White;
+        private static readonly Color ColBorder = Color.FromArgb(218, 218, 213);
+        private static readonly Color ColTextPri = Color.FromArgb(25, 25, 25);
+        private static readonly Color ColTextSec = Color.FromArgb(150, 150, 146);
+        private static readonly Color ColAccent = Color.FromArgb(24, 95, 165);
+        private static readonly Color ColAccentHover = Color.FromArgb(12, 68, 124);
+        private static readonly Color ColAccentBg = Color.FromArgb(230, 241, 251);
+        private static readonly Color ColAccentText = Color.FromArgb(12, 68, 124);
+        private static readonly Color ColInputBg = Color.FromArgb(248, 248, 245);
+        private static readonly Color ColGhostText = Color.FromArgb(100, 100, 96);
+        private static readonly int CornerRadius = 8;
+        private static readonly int CardPad = 12;
+        private static readonly int SidePad = 12;
 
         public ClarificationInputOverlay(ClarificationQuestion[] questions)
         {
@@ -49,7 +54,6 @@ namespace CopilotAddIn
             ShowInTaskbar = false;
             BackColor = ColBackground;
             StartPosition = FormStartPosition.Manual;
-            TabStop = false;
             DoubleBuffered = true;
 
             Build();
@@ -57,69 +61,90 @@ namespace CopilotAddIn
 
         private void Build()
         {
-            // Calculate total height: header(52) + question cards(N * ~100) + submitBtn(34) + padding
+            // ── Calculate preferred height ────────────────────────────────────
             int cardHeight = 0;
             foreach (var q in _questions)
             {
-                int h = 28; // question label
+                int h = 28;
                 if (!string.IsNullOrEmpty(q.Hint)) h += 16;
                 if (q.SuggestedValues != null && q.SuggestedValues.Length > 0) h += 16;
-                h += 34; // input box
-                h += CardPad * 2 + 6; // card margin
+                h += 34;
+                h += CardPad * 2 + 8;
                 cardHeight += h;
             }
+            _calculatedHeight = 52 + 24 + cardHeight + 48; // header + subtitle + cards + btn
 
-            int totalH = 52 + cardHeight + 40; // header + cards + submit area
+            // ── Use a Dock=Fill panel as the scroll container ─────────────────
+            // This is the key: everything lives inside a panel that docks to fill
+            // the form, so when SetBounds() resizes us, everything reflows.
+            _scrollPanel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                AutoScroll = false,
+                BackColor = ColBackground,
+            };
+            Controls.Add(_scrollPanel);
 
-            // Set size — TaskPaneManager will override to match placeholder width
-            Size = new Size(300, Math.Min(totalH, 450));
-            AutoScroll = totalH > 450;
+            BuildContent();
+        }
 
-            // ── Header (white card, matches MainTaskPane header style) ────────
+        /// <summary>
+        /// Builds all child controls inside _scrollPanel.
+        /// Called once from Build(); called again from OnLayout if width changed.
+        /// </summary>
+        private int _lastBuiltWidth = -1;
+
+        private void BuildContent()
+        {
+            int w = _scrollPanel.Width > 0 ? _scrollPanel.Width : 300;
+            if (w == _lastBuiltWidth) return;
+            _lastBuiltWidth = w;
+
+            _scrollPanel.Controls.Clear();
+            _answerBoxes.Clear();
+
+            int cardW = w - SidePad * 2;
+
+            // ── Header ────────────────────────────────────────────────────────
             var header = new Panel
             {
                 Location = new Point(0, 0),
-                Size = new Size(Width, 52),
-                BackColor = ColCardBg
+                Size = new Size(w, 52),
+                BackColor = ColCardBg,
             };
             header.Paint += (s, e) =>
             {
-                // Bottom border only
                 using (var pen = new Pen(ColBorder, 1f))
-                    e.Graphics.DrawLine(pen, 0, 51, Width, 51);
+                    e.Graphics.DrawLine(pen, 0, 51, w, 51);
             };
-            Controls.Add(header);
 
-            // Icon: blue rounded rect with ❓
             var iconBox = new Panel
             {
                 Location = new Point(12, 12),
                 Size = new Size(28, 28),
-                BackColor = ColAccentBg
+                BackColor = ColAccentBg,
             };
             iconBox.Region = RoundedRegion(28, 28, 6);
             iconBox.Paint += (s, e) =>
             {
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-                using (var brush = new SolidBrush(AccentDark()))
-                    e.Graphics.DrawString("?", new Font("Segoe UI", 13f, FontStyle.Bold), brush, 6, 2);
+                using (var brush = new SolidBrush(ColAccentHover))
+                    e.Graphics.DrawString("?",
+                        new Font("Segoe UI", 13f, FontStyle.Bold), brush, 6, 2);
             };
             header.Controls.Add(iconBox);
 
-            // Header text: "AI needs a few details"
             var headerLbl = new Label
             {
                 Text = "AI needs a few details",
-                Font = new Font("Arial", 11f, FontStyle.Bold),
+                Font = new Font("Segoe UI", 11f, FontStyle.Bold),
                 ForeColor = ColAccentText,
                 Location = new Point(48, 16),
-                Size = new Size(200, 20),
-                BackColor = Color.Transparent
+                Size = new Size(w - 48 - 60, 20),
+                BackColor = Color.Transparent,
             };
             header.Controls.Add(headerLbl);
 
-            // Skip link (top-right)
             var skipLink = new LinkLabel
             {
                 Text = "Skip →",
@@ -127,14 +152,16 @@ namespace CopilotAddIn
                 LinkColor = ColTextSec,
                 ActiveLinkColor = ColTextPri,
                 VisitedLinkColor = ColTextSec,
-                Location = new Point(Width - 56, 18),
+                Location = new Point(w - 56, 18),
                 Size = new Size(50, 18),
                 TextAlign = ContentAlignment.MiddleRight,
                 BackColor = Color.Transparent,
-                TabStop = false
+                TabStop = false,
             };
             skipLink.LinkClicked += (s, e) => Skipped?.Invoke(this, EventArgs.Empty);
             header.Controls.Add(skipLink);
+
+            _scrollPanel.Controls.Add(header);
 
             // ── Subtitle ──────────────────────────────────────────────────────
             var subLbl = new Label
@@ -142,59 +169,70 @@ namespace CopilotAddIn
                 Text = "Answer to improve step accuracy:",
                 Font = new Font("Segoe UI", 8.5f),
                 ForeColor = ColGhostText,
-                Location = new Point(12, 58),
-                Size = new Size(Width - 24, 16),
-                BackColor = Color.Transparent
+                Location = new Point(SidePad, 58),
+                Size = new Size(w - SidePad * 2, 16),
+                BackColor = Color.Transparent,
             };
-            Controls.Add(subLbl);
+            _scrollPanel.Controls.Add(subLbl);
 
             // ── Question cards ────────────────────────────────────────────────
             int y = 78;
             foreach (var q in _questions)
             {
-                var card = BuildQuestionCard(q, Width - 24);
-                card.Location = new Point(12, y);
-                Controls.Add(card);
-                y += card.Height + 6;
+                var card = BuildQuestionCard(q, cardW);
+                card.Location = new Point(SidePad, y);
+                _scrollPanel.Controls.Add(card);
+                y += card.Height + 8;
             }
 
             // ── Submit button ─────────────────────────────────────────────────
+            bool hasAny = false;
+            foreach (var tb in _answerBoxes)
+                if (!string.IsNullOrWhiteSpace(tb.Text)) { hasAny = true; break; }
+
             _submitBtn = new Button
             {
                 Text = "Generate Steps with Answers",
-                Font = new Font("Arial", 11f, FontStyle.Bold),
-                Location = new Point(12, y + 6),
-                Size = new Size(Width - 24, 34),
+                Font = new Font("Segoe UI", 10f, FontStyle.Bold),
+                Location = new Point(SidePad, y + 6),
+                Size = new Size(cardW, 34),
                 FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(180, 180, 180), // disabled gray
+                BackColor = hasAny ? ColAccent : Color.FromArgb(180, 180, 180),
                 ForeColor = Color.White,
                 Cursor = Cursors.Hand,
-                Enabled = false,
-                TabStop = false
+                Enabled = hasAny,
+                TabStop = false,
             };
             _submitBtn.FlatAppearance.BorderSize = 0;
             _submitBtn.Region = RoundedRegion(_submitBtn.Width, 34, CornerRadius);
             _submitBtn.Click += (s, e) => AnswersSubmitted?.Invoke(this, EventArgs.Empty);
             _submitBtn.Paint += PaintSubmitBtn;
-            Controls.Add(_submitBtn);
+            _scrollPanel.Controls.Add(_submitBtn);
         }
 
-        private Panel BuildQuestionCard(ClarificationQuestion question, int cardW)
+        // Rebuild when the form is resized (SetBounds called by TaskPaneManager)
+        protected override void OnLayout(LayoutEventArgs e)
         {
-            int qh = 28; // label height
+            base.OnLayout(e);
+            if (_scrollPanel != null)
+                BuildContent(); // reflows all controls to new width
+        }
+
+        private DoubleBufferedPanel BuildQuestionCard(ClarificationQuestion question, int cardW)
+        {
+            int qh = 28;
             if (!string.IsNullOrEmpty(question.Hint)) qh += 16;
             if (question.SuggestedValues != null && question.SuggestedValues.Length > 0) qh += 16;
-            qh += 34; // input box
+            qh += 34;
             qh += CardPad * 2;
 
-            var card = new Panel
+            var card = new DoubleBufferedPanel
             {
                 Size = new Size(cardW, qh),
                 BackColor = ColCardBg,
-                TabStop = false
+                TabStop = false,
             };
 
-            // Rounded border outline
             card.Paint += (s, e) =>
             {
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
@@ -205,21 +243,19 @@ namespace CopilotAddIn
 
             int cy = CardPad;
 
-            // Question label
             var qLabel = new Label
             {
                 Text = $"Q{question.Id}. {question.Question}",
-                Font = new Font("Arial", 11f, FontStyle.Bold),
+                Font = new Font("Segoe UI", 10f, FontStyle.Bold),
                 ForeColor = ColTextPri,
                 Location = new Point(CardPad, cy),
                 Size = new Size(cardW - CardPad * 2, 20),
                 BackColor = Color.Transparent,
-                TabStop = false
+                TabStop = false,
             };
             card.Controls.Add(qLabel);
             cy += 20;
 
-            // Hint
             if (!string.IsNullOrEmpty(question.Hint))
             {
                 var hint = new Label
@@ -230,13 +266,12 @@ namespace CopilotAddIn
                     Location = new Point(CardPad, cy),
                     Size = new Size(cardW - CardPad * 2, 14),
                     BackColor = Color.Transparent,
-                    TabStop = false
+                    TabStop = false,
                 };
                 card.Controls.Add(hint);
                 cy += 14;
             }
 
-            // Suggested values
             if (question.SuggestedValues != null && question.SuggestedValues.Length > 0)
             {
                 var sugg = new Label
@@ -247,18 +282,18 @@ namespace CopilotAddIn
                     Location = new Point(CardPad, cy),
                     Size = new Size(cardW - CardPad * 2, 14),
                     BackColor = Color.Transparent,
-                    TabStop = false
+                    TabStop = false,
                 };
                 card.Controls.Add(sugg);
                 cy += 14;
             }
 
-            // Input box
+            // Input container
             var inputContainer = new Panel
             {
                 Location = new Point(CardPad, cy),
                 Size = new Size(cardW - CardPad * 2, 30),
-                BackColor = ColInputBg
+                BackColor = ColInputBg,
             };
             inputContainer.Paint += (s, e) =>
             {
@@ -277,27 +312,29 @@ namespace CopilotAddIn
                 ForeColor = ColTextPri,
                 BorderStyle = BorderStyle.None,
                 TabStop = true,
-                Tag = question.Id
+                Tag = question.Id,
             };
+
             textBox.TextChanged += (s, e) =>
             {
                 bool hasAny = false;
                 foreach (var tb in _answerBoxes)
-                    if (!string.IsNullOrWhiteSpace(tb.Text.Trim())) { hasAny = true; break; }
+                    if (!string.IsNullOrWhiteSpace(tb.Text)) { hasAny = true; break; }
 
-                _submitBtn.Enabled = hasAny;
-                _submitBtn.BackColor = hasAny ? ColAccent : Color.FromArgb(180, 180, 180);
-                _submitBtn.Invalidate();
+                if (_submitBtn != null)
+                {
+                    _submitBtn.Enabled = hasAny;
+                    _submitBtn.BackColor = hasAny ? ColAccent : Color.FromArgb(180, 180, 180);
+                    _submitBtn.Invalidate();
+                }
                 inputContainer.Invalidate();
-                textBox.Invalidate();
             };
             textBox.GotFocus += (s, e) => inputContainer.Invalidate();
             textBox.LostFocus += (s, e) => inputContainer.Invalidate();
+
             inputContainer.Controls.Add(textBox);
             _answerBoxes.Add(textBox);
-
             card.Controls.Add(inputContainer);
-            _questionCards.Add(card);
 
             return card;
         }
@@ -308,11 +345,8 @@ namespace CopilotAddIn
             g.SmoothingMode = SmoothingMode.AntiAlias;
             var btn = (Button)sender;
             using (var brush = new SolidBrush(btn.BackColor))
-            {
-                var path = RoundedPath(btn.Width, btn.Height, CornerRadius);
-                g.FillPath(brush, path);
-            }
-            // Text
+                g.FillPath(brush, RoundedPath(btn.Width, btn.Height, CornerRadius));
+
             TextRenderer.DrawText(g, btn.Text, btn.Font,
                 new Rectangle(0, 0, btn.Width, btn.Height),
                 btn.ForeColor,
@@ -322,10 +356,7 @@ namespace CopilotAddIn
         // ── Graphics helpers ──────────────────────────────────────────────────
 
         private static Region RoundedRegion(int w, int h, int r)
-        {
-            var path = RoundedPath(w, h, r);
-            return new Region(path);
-        }
+            => new Region(RoundedPath(w, h, r));
 
         private static GraphicsPath RoundedPath(int w, int h, int r)
         {
@@ -343,8 +374,6 @@ namespace CopilotAddIn
             using (var path = RoundedPath(r.Width, r.Height, radius))
                 g.DrawPath(pen, path);
         }
-
-        private static Color AccentDark() => ColAccentHover;
 
         // ── Public: collect answers ───────────────────────────────────────────
 

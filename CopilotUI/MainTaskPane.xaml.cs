@@ -21,9 +21,17 @@ namespace CopilotUI
 
         // Sprint 1: Clarification state
         private ClarificationResponse _pendingClarification;
-        private string _resolvedContext; // LLM-resolved specs (NEMA dims, etc.)
+        private string _resolvedContext;
 
-        // Cache for direct card references to fix off-by-one issues with UI indices
+        // Tracks whether user has already seen/answered/skipped clarification
+        // for the current goal — prevents re-showing on TriggerGenerateSteps()
+        private bool _clarificationSeen = false;
+
+        // Cache: last clarification result per goal so we never call the API twice
+        private string _lastClarifiedGoal = null;
+        private ClarificationResponse _cachedClarification = null;
+
+        // Cache for direct card references
         private readonly List<StepCard> _stepCards = new List<StepCard>();
 
         // ── Overlay integration ───────────────────────────────────────────────
@@ -51,11 +59,11 @@ namespace CopilotUI
 
             LayoutUpdated += (s, e) => RequestOverlayReposition?.Invoke();
 
-            // Sprint 1: Reset clarification state on new session
-            NewSessionRequested += (s, e) => HideClarificationPanel();
+            // Reset clarification state on new session
+            NewSessionRequested += (s, e) => ResetClarificationState();
         }
 
-        // ── Overlay position helper ───────────────────────────────────────────
+        // ── Overlay position helpers ──────────────────────────────────────────
 
         public Rect? GetGoalInputScreenRect()
         {
@@ -73,6 +81,18 @@ namespace CopilotUI
                 return new Rect(topLeft.X, topLeft.Y, w, h);
             }
             catch { return null; }
+        }
+
+        /// <summary>
+        /// Called by TaskPaneManager after creating the clarification overlay so
+        /// the WPF placeholder reserves exactly the right height, preventing the
+        /// Win32 overlay from being clipped by the ScrollViewer.
+        /// </summary>
+        public void SetClarificationPlaceholderHeight(int height)
+        {
+            ClarificationPlaceholder.Height = height > 0 ? height : 0;
+            UpdateLayout();
+            RequestOverlayReposition?.Invoke();
         }
 
         public void SetGenerateButtonEnabled(bool enabled) => SubmitGoalBtn.IsEnabled = enabled;
@@ -111,14 +131,16 @@ namespace CopilotUI
 
             EmptyState.Visibility = Visibility.Visible;
             ErrorPanel.Visibility = Visibility.Collapsed;
-            HideClarificationPanel(); // Sprint 1: reset clarification state
+            ResetClarificationState();
             SetStatus("Ready", false);
             NewSessionRequested?.Invoke(this, EventArgs.Empty);
         }
 
-        private void OnSetupKeyClick(object sender, RoutedEventArgs e) => ApiKeySetupRequested?.Invoke(this, EventArgs.Empty);
+        private void OnSetupKeyClick(object sender, RoutedEventArgs e) =>
+            ApiKeySetupRequested?.Invoke(this, EventArgs.Empty);
 
-        private void OnDismissErrorClick(object sender, RoutedEventArgs e) => ErrorPanel.Visibility = Visibility.Collapsed;
+        private void OnDismissErrorClick(object sender, RoutedEventArgs e) =>
+            ErrorPanel.Visibility = Visibility.Collapsed;
 
         private async void OnGenerateStepsClick(object sender, RoutedEventArgs e)
         {
@@ -133,35 +155,52 @@ namespace CopilotUI
             ErrorPanel.Visibility = Visibility.Collapsed;
             EmptyState.Visibility = Visibility.Collapsed;
 
-            // Sprint 1: Run clarification check first (cheap model call)
-            SetStatus("Analyzing design goal…", false);
-            SetProgressVisible(true);
-
-            var clarification = await aiClient.ClarifyGoalAsync(currentGoal);
-            if (token.IsCancellationRequested) return;
-
-            // If clarification is needed and we haven't already answered, show questions
-            if (clarification != null && clarification.NeedsClarification && clarification.Questions != null && clarification.Questions.Length > 0)
+            // ── Clarification gate ────────────────────────────────────────────
+            // Only run if user hasn't already seen/answered/skipped for this goal
+            if (!_clarificationSeen)
             {
-                // If user hasn't seen questions yet, show them
-                if (_pendingClarification == null)
+                SetStatus("Analyzing design goal…", false);
+                SetProgressVisible(true);
+
+                // Use cached result if goal hasn't changed — avoids re-calling API
+                ClarificationResponse clarification;
+                if (_cachedClarification != null &&
+                    string.Equals(_lastClarifiedGoal, goal, StringComparison.Ordinal))
                 {
-                    _resolvedContext = clarification.ResolvedContext; // Capture LLM-resolved specs
+                    clarification = _cachedClarification;
+                }
+                else
+                {
+                    clarification = await aiClient.ClarifyGoalAsync(goal);
+                    if (token.IsCancellationRequested) return;
+                    _lastClarifiedGoal = goal;
+                    _cachedClarification = clarification;
+                }
+
+                if (clarification != null &&
+                    clarification.NeedsClarification &&
+                    clarification.Questions != null &&
+                    clarification.Questions.Length > 0)
+                {
+                    _resolvedContext = clarification.ResolvedContext;
                     SetProgressVisible(false);
                     ShowClarificationQuestions(clarification);
-                    return;
+                    return; // wait for user to answer or skip
                 }
-            }
 
-            // Either no clarification needed, or user answered/skipped — proceed to generation
+                // No clarification needed — mark as seen so we never check again
+                _clarificationSeen = true;
+            }
+            // ── End clarification gate ────────────────────────────────────────
+
             SetStatus("Scanning workspace…", false);
+            SetProgressVisible(true);
 
             try
             {
                 var context = scanner.ScanWorkspace(currentGoal);
                 if (token.IsCancellationRequested) return;
 
-                // Build clarification answers string for context injection
                 string clarificationAnswers = BuildClarificationAnswersString();
 
                 SetStatus("Waiting for AI…", false);
@@ -172,7 +211,8 @@ namespace CopilotUI
 
                 if (!string.IsNullOrEmpty(response.Error))
                 {
-                    bool isAuthError = response.Error.Contains("401") || response.Error.Contains("Authentication");
+                    bool isAuthError = response.Error.Contains("401") ||
+                                       response.Error.Contains("Authentication");
                     SetStatus(isAuthError ? "API key error — click Fix key" : "Error generating steps", isAuthError);
                     ShowInlineError(response.Error, response.RawResponse ?? "No details available");
                     EmptyState.Visibility = Visibility.Visible;
@@ -224,9 +264,7 @@ namespace CopilotUI
                 {
                     StepNumber = i + 1,
                     Feature = step.Feature,
-                    // Map the concise design rationale to SummaryLine
                     SummaryLine = step.SummaryLine ?? BuildStepSummaryFallback(step),
-                    // Map the full deep reasoning to StepRationale
                     StepRationale = step.StepRationale,
                     Instructions = step.Instructions,
                     Risk = step.Risk,
@@ -241,9 +279,6 @@ namespace CopilotUI
             }
         }
 
-        /// <summary>
-        /// Fallback summary builder if the AI model doesn't provide a concise SummaryLine.
-        /// </summary>
         private string BuildStepSummaryFallback(StepData step)
         {
             var parts = new List<string>();
@@ -292,26 +327,35 @@ namespace CopilotUI
             ErrorDiagnosisText.Text = details;
         }
 
-        // ── Sprint 1: Clarification UI Methods (WinForms overlay) ─────────────
+        // ── Sprint 1: Clarification UI Methods ────────────────────────────────
 
         private void ShowClarificationQuestions(ClarificationResponse clarification)
         {
             _pendingClarification = clarification;
             ClarificationPanel.Visibility = Visibility.Visible;
-
-            // Delegate to TaskPaneManager which creates the WinForms overlay
             DoShowClarificationQuestions?.Invoke(clarification.Questions);
         }
 
+        /// <summary>
+        /// Called by the overlay's Skip button via TaskPaneManager.
+        /// Marks clarification as seen and immediately proceeds to generation.
+        /// </summary>
         public void OnSkipClarifyClicked()
         {
+            _clarificationSeen = true;
             _pendingClarification = new ClarificationResponse
             {
                 NeedsClarification = false,
                 SkipReason = "User skipped"
             };
             HideClarificationQuestions?.Invoke();
-            HideClarificationPanel();
+
+            // Collapse the panel without nulling _pendingClarification or _clarificationSeen
+            ClarificationPanel.Visibility = Visibility.Collapsed;
+
+            // Proceed directly to generation — _clarificationSeen=true means the
+            // clarification gate in OnGenerateStepsClick will be bypassed
+            TriggerGenerateSteps();
         }
 
         private string BuildClarificationAnswersString()
@@ -330,10 +374,6 @@ namespace CopilotUI
             return parts.Count > 0 ? string.Join("\n", parts) : null;
         }
 
-        /// <summary>
-        /// Returns screen rect of the clarification placeholder for WinForms overlay positioning.
-        /// Called by TaskPaneManager via dispatcher.
-        /// </summary>
         public Rect? GetClarificationScreenRect()
         {
             try
@@ -352,11 +392,17 @@ namespace CopilotUI
             catch { return null; }
         }
 
-        private void HideClarificationPanel()
+        /// <summary>
+        /// Full clarification state reset — call only on new session / clear all.
+        /// </summary>
+        private void ResetClarificationState()
         {
             ClarificationPanel.Visibility = Visibility.Collapsed;
             _pendingClarification = null;
             _resolvedContext = null;
+            _clarificationSeen = false;
+            _lastClarifiedGoal = null;
+            _cachedClarification = null;
         }
     }
 }

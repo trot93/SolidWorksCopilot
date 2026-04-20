@@ -10,19 +10,6 @@
              FocusManager.IsFocusScope="True"
              PreviewMouseDown="OnPanePreviewMouseDown">
 
-    <!--
-        GOAL INPUT CHANGE:
-        The WPF TextBox (GoalInput) has been replaced by an invisible Border named
-        GoalInputPlaceholder. At runtime, TaskPaneManager creates a native WinForms
-        TextBox overlay and positions it to cover this Border exactly.
-
-        This sidesteps the Win32 focus ownership battle between SolidWorks and
-        ElementHost. The native TextBox lives in its own HWND, parented directly
-        into our container — the same architecture as ApiKeySetupForm which works.
-
-        All other UI is unchanged.
-    -->
-
     <UserControl.Resources>
         <Style x:Key="PrimaryBtn" TargetType="Button">
             <Setter Property="Background"      Value="#185FA5"/>
@@ -110,8 +97,6 @@
                 </Setter.Value>
             </Setter>
         </Style>
-
-        <!-- Sprint 1: Clarification card styles (kept for future reference, WinForms overlay handles input) -->
     </UserControl.Resources>
 
     <ScrollViewer VerticalScrollBarVisibility="Auto"
@@ -198,18 +183,6 @@
                                Foreground="#444441"
                                Margin="0,0,0,6"/>
 
-                    <!--
-                        GoalInputPlaceholder: an invisible Border that reserves the
-                        exact space the WPF TextBox used to occupy.
-
-                        At runtime, GoalInputOverlay (WinForms) is positioned to
-                        cover this Border. The native TextBox sits on top of it and
-                        accepts keyboard input without any Win32 focus hackery.
-
-                        Height=72 matches the original TextBox Height="72".
-                        The 2px Margin creates breathing room so the overlay border
-                        doesn't clash with this Border's background.
-                    -->
                     <Border x:Name="GoalInputPlaceholder"
                             Height="72"
                             Background="Transparent"
@@ -228,18 +201,22 @@
             </Border>
 
             <!-- ── Clarification Panel (Sprint 1) ─────────────────────────── -->
-            <!-- WinForms overlay is positioned on top of the placeholder below -->
+            <!--
+                IMPORTANT: ClarificationPlaceholder height is set from code-behind
+                via SetClarificationPlaceholderHeight() once the overlay's
+                PreferredHeight is known. This allows the WPF layout to reserve
+                exactly the right amount of space so the Win32 overlay is never
+                clipped by the ScrollViewer or StackPanel.
+            -->
             <Border x:Name="ClarificationPanel"
                     Background="Transparent"
-                    Padding="0,0,0,4"
+                    Padding="0,4,0,4"
                     Visibility="Collapsed">
-
-                <!-- Placeholder: exact position+size for WinForms overlay positioning -->
                 <Border x:Name="ClarificationPlaceholder"
-                        MinHeight="120"
+                        Height="400"
                         Background="Transparent"
                         BorderThickness="0"
-                        Margin="12,0,12,0"/>
+                        Margin="0,0,0,0"/>
             </Border>
 
             <!-- ── Status bar ─────────────────────────────────────────────── -->

@@ -34,10 +34,15 @@ namespace CopilotAddIn
         [StructLayout(LayoutKind.Sequential)] struct POINT { public int X, Y; }
 
         // ── Diagnostics ───────────────────────────────────────────────────────
-        private static readonly string LogPath = Path.Combine(Path.GetTempPath(), "SW_Copilot_overlay.log");
+        private static readonly string LogPath =
+            Path.Combine(Path.GetTempPath(), "SW_Copilot_overlay.log");
         private static void Log(string msg)
         {
-            try { File.AppendAllText(LogPath, "[" + DateTime.Now.ToString("HH:mm:ss.fff") + "] " + msg + "\n"); }
+            try
+            {
+                File.AppendAllText(LogPath,
+                "[" + DateTime.Now.ToString("HH:mm:ss.fff") + "] " + msg + "\n");
+            }
             catch { }
         }
 
@@ -100,7 +105,6 @@ namespace CopilotAddIn
             });
             poller.Start();
 
-            // HandleCreated already fired (we forced Handle above) — start timer directly
             var attachTimer = new System.Windows.Forms.Timer { Interval = 1000 };
             attachTimer.Tick += (ts, te) =>
             {
@@ -158,10 +162,12 @@ namespace CopilotAddIn
                 int w = (int)r.Width;
                 int h = (int)r.Height;
 
-                Log("  client coords: x=" + topLeft.X + " y=" + topLeft.Y + " w=" + w + " h=" + h);
+                Log("  client coords: x=" + topLeft.X + " y=" + topLeft.Y
+                    + " w=" + w + " h=" + h);
 
                 if (container.InvokeRequired)
-                    container.Invoke(new Action(() => goalOverlay.SetBounds(topLeft.X, topLeft.Y, w, h)));
+                    container.Invoke(new Action(() =>
+                        goalOverlay.SetBounds(topLeft.X, topLeft.Y, w, h)));
                 else
                     goalOverlay.SetBounds(topLeft.X, topLeft.Y, w, h);
             }
@@ -198,11 +204,22 @@ namespace CopilotAddIn
                 clarifyOverlay.AnswersSubmitted += OnClarifyAnswersSubmitted;
                 clarifyOverlay.Skipped += OnClarifySkipped;
 
+                int preferredH = clarifyOverlay.PreferredHeight;
+                int maxH = Math.Max(container.Height - 150, 200);
+                int h = Math.Min(preferredH, maxH);
+
+                // Use FULL container width — no inset margin here
+                clarifyOverlay.Size = new System.Drawing.Size(container.Width, h);
+                clarifyOverlay.AutoScroll = preferredH > h;
+
+                wpfPane?.Dispatcher.Invoke(() =>
+                    wpfPane.SetClarificationPlaceholderHeight(h),
+                    System.Windows.Threading.DispatcherPriority.Render);
+
                 clarifyOverlay.Show();
                 SetParent(clarifyOverlay.Handle, container.Handle);
+                clarifyOverlay.BringToFront();
                 RepositionClarifyOverlay();
-
-                Log("  Clarification overlay shown, questions: " + questions.Length);
             }
             catch (Exception ex) { Log("  ShowClarificationOverlay EXCEPTION: " + ex.Message); }
         }
@@ -243,21 +260,20 @@ namespace CopilotAddIn
                 var topLeft = new POINT { X = (int)r.Left, Y = (int)r.Top };
                 ScreenToClient(container.Handle, ref topLeft);
 
-                // Match placeholder width, use overlay's natural height (or min height)
-                int w = (int)r.Width;
-                int h = Math.Max((int)r.Height, 120);
+                // Fill the full container width, not just the placeholder width
+                int w = container.Width;
+                int h = clarifyOverlay.Height;
 
-                // Resize overlay to fit container width
                 if (container.InvokeRequired)
                     container.Invoke(new Action(() =>
                     {
-                        clarifyOverlay.Width = w;
-                        clarifyOverlay.SetBounds(topLeft.X, topLeft.Y, w, h);
+                        clarifyOverlay.SetBounds(0, topLeft.Y, container.Width, clarifyOverlay.Height);
+                        clarifyOverlay.BringToFront();
                     }));
                 else
                 {
-                    clarifyOverlay.Width = w;
-                    clarifyOverlay.SetBounds(topLeft.X, topLeft.Y, w, h);
+                    clarifyOverlay.SetBounds(0, topLeft.Y, container.Width, clarifyOverlay.Height);
+                    clarifyOverlay.BringToFront();
                 }
             }
             catch (Exception ex) { Log("  RepositionClarifyOverlay EXCEPTION: " + ex.Message); }
@@ -274,9 +290,14 @@ namespace CopilotAddIn
 
         private void OnClarifyAnswersSubmitted(object sender, EventArgs e)
         {
-            wpfPane?.Dispatcher.BeginInvoke(
-                new Action(() => wpfPane.TriggerGenerateSteps()),
-                System.Windows.Threading.DispatcherPriority.Input);
+            // Mark clarification as seen then hide overlay before triggering generation
+            wpfPane?.Dispatcher.BeginInvoke(new Action(() =>
+            {
+                HideClarificationOverlay();
+                wpfPane.SetClarificationPlaceholderHeight(0);
+                // _clarificationSeen is set inside OnSkipClarifyClicked / here via delegate
+                wpfPane.TriggerGenerateSteps();
+            }), System.Windows.Threading.DispatcherPriority.Input);
         }
 
         private void OnClarifySkipped(object sender, EventArgs e)
@@ -330,7 +351,7 @@ namespace CopilotAddIn
             [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr hWnd, out RECT r);
             [DllImport("user32.dll")]
             static extern bool MoveWindow(IntPtr hWnd, int X, int Y,
-                                                                       int W, int H, bool repaint);
+                                          int W, int H, bool repaint);
             [StructLayout(LayoutKind.Sequential)]
             struct RECT { public int Left, Top, Right, Bottom; }
 
