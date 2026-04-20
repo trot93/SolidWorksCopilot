@@ -112,7 +112,12 @@ namespace CopilotAddIn
 
                 string apiKey = LoadApiKeyFromConfig();
                 string prov = LoadProviderFromConfig();
-                aiClient = new AiClient(apiKey ?? string.Empty, prov, logger);
+
+                // Pass apiKey as-is (null when missing).
+                // Using ?? string.Empty would coerce null → "" which passes the
+                // IsNullOrEmpty guard here but then fails the !IsNullOrEmpty check
+                // inside ConfigureHeaders, so the auth header would never be set.
+                aiClient = new AiClient(apiKey, prov, logger);
 
                 WriteLog("Initializing TaskPane...");
                 taskPaneManager = new TaskPaneManager(swApp, addInId, scanner, aiClient, logger);
@@ -134,10 +139,10 @@ namespace CopilotAddIn
                 }
                 else
                 {
-                    // Key exists → validate silently.
-                    // IMPORTANT: on failure we only show the banner.
-                    // We do NOT auto-open the dialog — a transient network hiccup
-                    // during SW startup must not force the user through setup every time.
+                    // Key exists → validate silently after SW finishes loading.
+                    // On a definitive auth failure (401/403) show the banner.
+                    // On a network/timeout failure assume the key is fine —
+                    // a slow network at startup must not force the user through setup.
                     WriteLog("API key found — scheduling background validation.");
                     DeferSilentValidation();
                 }
@@ -236,31 +241,56 @@ namespace CopilotAddIn
 
         /// <summary>
         /// Key exists on disk. Validate it silently after SW finishes loading.
-        /// On failure: show the banner only — do NOT auto-open the dialog.
-        /// A transient network error at startup should not interrupt the engineer.
-        /// They can click ⚙ or "Fix key" whenever they want to correct it.
+        ///
+        /// Three outcomes:
+        ///   1. ok = true               → NotifyApiKeyReady (normal path).
+        ///   2. ok = false, isAuthError  → ShowApiKeyInvalidState — the provider
+        ///      definitively rejected the key (401/403); the user must fix it.
+        ///   3. ok = false, !isAuthError → NotifyApiKeyReady anyway — this was a
+        ///      network hiccup, timeout, or DNS failure at startup. The key is
+        ///      probably fine; the first real Generate Steps call will surface any
+        ///      genuine problem without forcing the user through setup every time
+        ///      they open SW on a slow network.
         /// </summary>
         private void DeferSilentValidation()
         {
-            var timer = new System.Windows.Forms.Timer { Interval = 3000 };
+            // 5 s gives the network stack more time to settle after SW starts.
+            var timer = new System.Windows.Forms.Timer { Interval = 5000 };
             timer.Tick += async (s, e) =>
             {
                 timer.Stop();
                 timer.Dispose();
 
+                // Defensive guard — key should always be present here because
+                // ConnectToSW branched on it, but re-read to be safe.
+                string apiKey = LoadApiKeyFromConfig();
+                if (string.IsNullOrEmpty(apiKey))
+                {
+                    WriteLog("DeferSilentValidation: key missing at validation time — showing banner.");
+                    taskPaneManager?.ShowApiKeyMissingState();
+                    return;
+                }
+
                 taskPaneManager?.SetStatus("Verifying API key…", false);
-                (bool ok, string errorMsg) = await aiClient.ValidateKeyAsync();
+                (bool ok, bool isAuthError, string errorMsg) = await aiClient.ValidateKeyAsync();
 
                 if (ok)
                 {
                     WriteLog("API key validated successfully.");
                     taskPaneManager?.NotifyApiKeyReady();
                 }
+                else if (isAuthError)
+                {
+                    // Provider returned 401/403 — key is definitively rejected.
+                    WriteLog($"API key rejected by provider (auth error): {errorMsg}");
+                    taskPaneManager?.ShowApiKeyInvalidState(errorMsg);
+                }
                 else
                 {
-                    WriteLog($"API key validation failed: {errorMsg}");
-                    // Banner only — the engineer was not asked to do anything.
-                    taskPaneManager?.ShowApiKeyInvalidState(errorMsg);
+                    // Timeout, DNS failure, or other transient network error.
+                    // Treat the key as valid and let the first real call catch it.
+                    WriteLog($"API key validation inconclusive (network error, assuming valid): {errorMsg}");
+                    taskPaneManager?.NotifyApiKeyReady();
                 }
             };
             timer.Start();

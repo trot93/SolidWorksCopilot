@@ -22,6 +22,19 @@ namespace CopilotModels
 
         [JsonProperty("active_selection")]
         public string ActiveSelection { get; set; }
+
+        // ── Sprint 2: image attachment ────────────────────────────────────────
+
+        /// <summary>
+        /// Base64-encoded PNG from GoalInputOverlay, or null.
+        /// Forwarded into every LLM call that supports vision.
+        /// </summary>
+        [JsonIgnore]
+        public string ImageBase64 { get; set; }
+
+        /// <summary>"image/png" when ImageBase64 is set, null otherwise.</summary>
+        [JsonIgnore]
+        public string ImageMediaType { get; set; }
     }
 
     public class MaterialInfo
@@ -106,23 +119,16 @@ namespace CopilotModels
         [JsonProperty("instructions")]
         public string[] Instructions { get; set; }
 
-        /// <summary>
-        /// A concise, one-line rationale displayed on the card front.
-        /// </summary>
         [JsonProperty("summary_line")]
         public string SummaryLine { get; set; }
 
-        /// <summary>
-        /// The full, deep design reasoning displayed in the expanded view.
-        /// </summary>
         [JsonProperty("step_rationale")]
         public string StepRationale { get; set; }
 
         [JsonProperty("risk")]
         public string Risk { get; set; }
 
-        // --- Legacy Fields (Retained for backward compatibility) ---
-
+        // Legacy fields retained for backward compatibility
         [Obsolete("Use StepRationale instead")]
         [JsonProperty("why_geometric")]
         public string WhyGeometric { get; set; }
@@ -144,7 +150,7 @@ namespace CopilotModels
         [JsonProperty("confidence")] public string Confidence { get; set; }
     }
 
-    // ── Clarification models (Sprint 1) ──────────────────────────────────────
+    // ── Clarification models ──────────────────────────────────────────────────
 
     public class ClarificationQuestion
     {
@@ -197,4 +203,5 @@ namespace CopilotModels
         public object[] FeatureContext { get; set; }
         public MaterialInfo Material { get; set; }
     }
+
 }

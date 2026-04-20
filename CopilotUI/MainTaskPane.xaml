@@ -23,10 +23,8 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                CornerRadius="6" Padding="12,8">
-                            <ContentPresenter HorizontalAlignment="Center"
-                                              VerticalAlignment="Center"/>
+                        <Border Background="{TemplateBinding Background}" CornerRadius="6" Padding="12,8">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
@@ -54,10 +52,8 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                CornerRadius="4" Padding="8,4">
-                            <ContentPresenter HorizontalAlignment="Center"
-                                              VerticalAlignment="Center"/>
+                        <Border Background="{TemplateBinding Background}" CornerRadius="4" Padding="8,4">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
@@ -82,10 +78,8 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                CornerRadius="6" Padding="2">
-                            <ContentPresenter HorizontalAlignment="Center"
-                                              VerticalAlignment="Center"/>
+                        <Border Background="{TemplateBinding Background}" CornerRadius="6" Padding="2">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
@@ -99,15 +93,11 @@
         </Style>
     </UserControl.Resources>
 
-    <ScrollViewer VerticalScrollBarVisibility="Auto"
-                  HorizontalScrollBarVisibility="Disabled">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
         <StackPanel>
 
             <!-- ── Header ─────────────────────────────────────────────────── -->
-            <Border Background="White"
-                    BorderBrush="#DADAD5"
-                    BorderThickness="0,0,0,1"
-                    Height="52">
+            <Border Background="White" BorderBrush="#DADAD5" BorderThickness="0,0,0,1" Height="52">
                 <Grid Margin="12,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
@@ -115,29 +105,15 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-
-                    <Border Grid.Column="0"
-                            Width="28" Height="28"
-                            Background="#E6F1FB"
-                            CornerRadius="6"
-                            VerticalAlignment="Center"
-                            Margin="0,0,8,0">
+                    <Border Grid.Column="0" Width="28" Height="28" Background="#E6F1FB"
+                            CornerRadius="6" VerticalAlignment="Center" Margin="0,0,8,0">
                         <Viewbox Width="16" Height="16">
                             <Canvas Width="24" Height="24">
-                                <Ellipse Canvas.Left="9" Canvas.Top="9"
-                                         Width="6" Height="6" Fill="#185FA5"/>
-                                <Line X1="12" Y1="4"  X2="12" Y2="9"
-                                      Stroke="#185FA5" StrokeThickness="1.5"
-                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-                                <Line X1="12" Y1="15" X2="12" Y2="20"
-                                      Stroke="#185FA5" StrokeThickness="1.5"
-                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-                                <Line X1="4"  Y1="12" X2="9"  Y2="12"
-                                      Stroke="#185FA5" StrokeThickness="1.5"
-                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-                                <Line X1="15" Y1="12" X2="20" Y2="12"
-                                      Stroke="#185FA5" StrokeThickness="1.5"
-                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                <Ellipse Canvas.Left="9" Canvas.Top="9" Width="6" Height="6" Fill="#185FA5"/>
+                                <Line X1="12" Y1="4"  X2="12" Y2="9"  Stroke="#185FA5" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                <Line X1="12" Y1="15" X2="12" Y2="20" Stroke="#185FA5" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                <Line X1="4"  Y1="12" X2="9"  Y2="12" Stroke="#185FA5" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                <Line X1="15" Y1="12" X2="20" Y2="12" Stroke="#185FA5" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
                                 <Ellipse Canvas.Left="2"  Canvas.Top="2"  Width="4" Height="4" Fill="#B5D4F4"/>
                                 <Ellipse Canvas.Left="18" Canvas.Top="2"  Width="4" Height="4" Fill="#B5D4F4"/>
                                 <Ellipse Canvas.Left="2"  Canvas.Top="18" Width="4" Height="4" Fill="#B5D4F4"/>
@@ -145,49 +121,53 @@
                             </Canvas>
                         </Viewbox>
                     </Border>
-
                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                        <TextBlock Text="AI Copilot"
-                                   FontSize="13" FontWeight="SemiBold"
-                                   Foreground="#191919"/>
-                        <TextBlock Text="SOLIDWORKS Design Assistant"
-                                   FontSize="9" Foreground="#969692"/>
+                        <TextBlock Text="AI Copilot" FontSize="13" FontWeight="SemiBold" Foreground="#191919"/>
+                        <TextBlock Text="SOLIDWORKS Design Assistant" FontSize="9" Foreground="#969692"/>
                     </StackPanel>
-
-                    <Button x:Name="SetupKeyBtn"
-                            Grid.Column="2"
-                            Content="Setup"
-                            Style="{StaticResource GhostBtn}"
-                            Visibility="Collapsed"
-                            VerticalAlignment="Center"
-                            Margin="0,0,4,0"
-                            Click="OnSetupKeyClick"/>
-
-                    <Button x:Name="GearSettingsBtn"
-                            Grid.Column="3"
-                            Content="⚙"
-                            Style="{StaticResource GearBtn}"
-                            VerticalAlignment="Center"
+                    <Button x:Name="SetupKeyBtn" Grid.Column="2" Content="Setup"
+                            Style="{StaticResource GhostBtn}" Visibility="Collapsed"
+                            VerticalAlignment="Center" Margin="0,0,4,0" Click="OnSetupKeyClick"/>
+                    <Button x:Name="GearSettingsBtn" Grid.Column="3" Content="⚙"
+                            Style="{StaticResource GearBtn}" VerticalAlignment="Center"
                             Click="OnSetupKeyClick"/>
                 </Grid>
             </Border>
 
             <!-- ── Goal input ─────────────────────────────────────────────── -->
-            <Border Background="White"
-                    BorderBrush="#DADAD5"
-                    BorderThickness="0,0,0,1"
-                    Padding="12">
+            <Border Background="White" BorderBrush="#DADAD5" BorderThickness="0,0,0,1" Padding="12">
                 <StackPanel>
-                    <TextBlock Text="Design Goal"
-                               FontSize="11" FontWeight="SemiBold"
-                               Foreground="#444441"
-                               Margin="0,0,0,6"/>
+                    <TextBlock Text="Design Goal" FontSize="11" FontWeight="SemiBold"
+                               Foreground="#444441" Margin="0,0,0,6"/>
 
+                    <!--
+                        Height=100 gives 72px text area + 28px toolbar (attach button).
+                        The WinForms GoalInputOverlay is parented here by TaskPaneManager.
+                    -->
                     <Border x:Name="GoalInputPlaceholder"
-                            Height="72"
+                            Height="100"
                             Background="Transparent"
-                            BorderThickness="0"
-                            Margin="0,0,0,0"/>
+                            BorderThickness="0"/>
+
+                    <!--
+                        Sprint 2: Image badge — shown by SetImageAttached(true).
+                        Purely informational; the attach/clear actions live in the
+                        WinForms toolbar inside GoalInputOverlay.
+                    -->
+                    <Border x:Name="ImageBadge"
+                            Visibility="Collapsed"
+                            Background="#E6F1FB"
+                            CornerRadius="4"
+                            Padding="8,5"
+                            Margin="0,6,0,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="🖼" FontSize="11" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                            <TextBlock FontSize="10" Foreground="#0C447C" VerticalAlignment="Center">
+                                <Run Text="Reference image attached" FontWeight="SemiBold"/>
+                                <Run Text=" — AI will use it for context" Foreground="#969692"/>
+                            </TextBlock>
+                        </StackPanel>
+                    </Border>
 
                     <Button x:Name="SubmitGoalBtn"
                             Content="Generate Steps"
@@ -200,14 +180,7 @@
                 </StackPanel>
             </Border>
 
-            <!-- ── Clarification Panel (Sprint 1) ─────────────────────────── -->
-            <!--
-                IMPORTANT: ClarificationPlaceholder height is set from code-behind
-                via SetClarificationPlaceholderHeight() once the overlay's
-                PreferredHeight is known. This allows the WPF layout to reserve
-                exactly the right amount of space so the Win32 overlay is never
-                clipped by the ScrollViewer or StackPanel.
-            -->
+            <!-- ── Clarification Panel ────────────────────────────────────── -->
             <Border x:Name="ClarificationPanel"
                     Background="Transparent"
                     Padding="0,4,0,4"
@@ -220,10 +193,7 @@
             </Border>
 
             <!-- ── Status bar ─────────────────────────────────────────────── -->
-            <Border Background="#F1EFE8"
-                    BorderBrush="#DADAD5"
-                    BorderThickness="0,0,0,1"
-                    Padding="12,6">
+            <Border Background="#F1EFE8" BorderBrush="#DADAD5" BorderThickness="0,0,0,1" Padding="12,6">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
@@ -231,58 +201,28 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-
-                    <Ellipse x:Name="StatusDot"
-                             Grid.Column="0"
-                             Width="7" Height="7"
-                             Fill="#1D9E75"
-                             VerticalAlignment="Center"
-                             Margin="0,0,7,0"/>
-
-                    <TextBlock x:Name="StatusText"
-                               Grid.Column="1"
-                               Text="Ready"
-                               FontSize="11"
-                               Foreground="#5F5E5A"
-                               VerticalAlignment="Center"/>
-
-                    <Button x:Name="FixKeyBtn"
-                            Grid.Column="2"
-                            Content="Fix key"
-                            Style="{StaticResource GhostBtn}"
-                            Foreground="#A32D2D"
-                            FontSize="10"
-                            Visibility="Collapsed"
-                            VerticalAlignment="Center"
-                            Margin="4,0"
-                            Click="OnSetupKeyClick"/>
-
-                    <ProgressBar x:Name="ProgressIndicator"
-                                 Grid.Column="3"
-                                 Width="80" Height="4"
-                                 IsIndeterminate="False"
-                                 Visibility="Collapsed"
-                                 Foreground="#185FA5"
-                                 Background="#DADAD5"
-                                 VerticalAlignment="Center"/>
+                    <Ellipse x:Name="StatusDot" Grid.Column="0" Width="7" Height="7" Fill="#1D9E75"
+                             VerticalAlignment="Center" Margin="0,0,7,0"/>
+                    <TextBlock x:Name="StatusText" Grid.Column="1" Text="Ready"
+                               FontSize="11" Foreground="#5F5E5A" VerticalAlignment="Center"/>
+                    <Button x:Name="FixKeyBtn" Grid.Column="2" Content="Fix key"
+                            Style="{StaticResource GhostBtn}" Foreground="#A32D2D"
+                            FontSize="10" Visibility="Collapsed" VerticalAlignment="Center"
+                            Margin="4,0" Click="OnSetupKeyClick"/>
+                    <ProgressBar x:Name="ProgressIndicator" Grid.Column="3"
+                                 Width="80" Height="4" IsIndeterminate="False"
+                                 Visibility="Collapsed" Foreground="#185FA5"
+                                 Background="#DADAD5" VerticalAlignment="Center"/>
                 </Grid>
             </Border>
 
             <!-- ── Step list ──────────────────────────────────────────────── -->
             <StackPanel x:Name="StepListPanel" Margin="0,4,0,8">
-                <Border x:Name="EmptyState"
-                        Margin="12,20,12,0"
-                        Padding="16"
-                        Background="White"
-                        BorderBrush="#DADAD5"
-                        BorderThickness="1"
-                        CornerRadius="8">
+                <Border x:Name="EmptyState" Margin="12,20,12,0" Padding="16"
+                        Background="White" BorderBrush="#DADAD5" BorderThickness="1" CornerRadius="8">
                     <StackPanel HorizontalAlignment="Center">
-                        <Border Width="40" Height="40"
-                                Background="#E6F1FB"
-                                CornerRadius="20"
-                                HorizontalAlignment="Center"
-                                Margin="0,0,0,10">
+                        <Border Width="40" Height="40" Background="#E6F1FB" CornerRadius="20"
+                                HorizontalAlignment="Center" Margin="0,0,0,10">
                             <Viewbox Width="20" Height="20">
                                 <Canvas Width="24" Height="24">
                                     <Path Data="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"
@@ -291,60 +231,38 @@
                                 </Canvas>
                             </Viewbox>
                         </Border>
-                        <TextBlock Text="No steps yet"
-                                   FontSize="12" FontWeight="SemiBold"
-                                   Foreground="#444441"
-                                   HorizontalAlignment="Center"/>
+                        <TextBlock Text="No steps yet" FontSize="12" FontWeight="SemiBold"
+                                   Foreground="#444441" HorizontalAlignment="Center"/>
                         <TextBlock Text="Enter a design goal above&#10;and click Generate Steps"
-                                   FontSize="11" Foreground="#969692"
-                                   HorizontalAlignment="Center"
-                                   TextAlignment="Center"
-                                   Margin="0,4,0,0"
-                                   LineHeight="18"/>
+                                   FontSize="11" Foreground="#969692" HorizontalAlignment="Center"
+                                   TextAlignment="Center" Margin="0,4,0,0" LineHeight="18"/>
                     </StackPanel>
                 </Border>
             </StackPanel>
 
             <!-- ── Error panel ────────────────────────────────────────────── -->
-            <Border x:Name="ErrorPanel"
-                    Background="#FFF5F5"
-                    BorderBrush="#F09595"
-                    BorderThickness="0,1,0,0"
-                    Padding="12,10"
-                    Visibility="Collapsed">
+            <Border x:Name="ErrorPanel" Background="#FFF5F5" BorderBrush="#F09595"
+                    BorderThickness="0,1,0,0" Padding="12,10" Visibility="Collapsed">
                 <StackPanel>
                     <Grid Margin="0,0,0,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0"
-                                   Text="Operation failed"
-                                   FontSize="11" FontWeight="SemiBold"
-                                   Foreground="#A32D2D"
-                                   VerticalAlignment="Center"/>
-                        <Button x:Name="DismissErrorBtn"
-                                Grid.Column="1"
-                                Content="✕"
-                                Style="{StaticResource GhostBtn}"
-                                Foreground="#A32D2D"
-                                Padding="4,2"
-                                Click="OnDismissErrorClick"/>
+                        <TextBlock Grid.Column="0" Text="Operation failed" FontSize="11"
+                                   FontWeight="SemiBold" Foreground="#A32D2D" VerticalAlignment="Center"/>
+                        <Button x:Name="DismissErrorBtn" Grid.Column="1" Content="✕"
+                                Style="{StaticResource GhostBtn}" Foreground="#A32D2D"
+                                Padding="4,2" Click="OnDismissErrorClick"/>
                     </Grid>
-                    <TextBlock x:Name="ErrorMessageText"
-                               TextWrapping="Wrap"
-                               FontSize="11" Foreground="#791F1F"
-                               Margin="0,0,0,4"/>
-                    <TextBlock x:Name="ErrorDiagnosisText"
-                               TextWrapping="Wrap"
-                               FontSize="11" Foreground="#5F5E5A"
-                               FontStyle="Italic"
-                               Margin="0,0,0,6"/>
+                    <TextBlock x:Name="ErrorMessageText" TextWrapping="Wrap"
+                               FontSize="11" Foreground="#791F1F" Margin="0,0,0,4"/>
+                    <TextBlock x:Name="ErrorDiagnosisText" TextWrapping="Wrap"
+                               FontSize="11" Foreground="#5F5E5A" FontStyle="Italic" Margin="0,0,0,6"/>
                     <ItemsControl x:Name="AlternativesList"/>
                 </StackPanel>
             </Border>
 
         </StackPanel>
     </ScrollViewer>
-
 </UserControl>

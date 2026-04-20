@@ -21,7 +21,6 @@ namespace CopilotCore
         private const string OpenRouterModel = "google/gemini-2.0-flash-001";
         private const string VerifyModel = "google/gemini-2.0-flash-001";
 
-        // Cheap fast models for clarification
         private const string ClarifyModelAnthropic = "claude-3-haiku-20240307";
         private const string ClarifyModelOpenRouter = "openai/gpt-4o-mini";
         private const string ClarifyModelOpenAI = "gpt-4o-mini";
@@ -30,17 +29,13 @@ namespace CopilotCore
         {
             this.logger = logger;
             this.provider = provider.ToLower();
-
-            httpClient = new HttpClient();
-            httpClient.Timeout = TimeSpan.FromSeconds(60);
-
+            httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
             ConfigureHeaders(apiKey);
         }
 
         private void ConfigureHeaders(string apiKey)
         {
             httpClient.DefaultRequestHeaders.Clear();
-
             switch (provider)
             {
                 case "anthropic":
@@ -49,7 +44,6 @@ namespace CopilotCore
                         httpClient.DefaultRequestHeaders.Add("x-api-key", apiKey);
                     httpClient.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
                     break;
-
                 case "openrouter":
                     modelEndpoint = OpenRouterEndpoint;
                     if (!string.IsNullOrEmpty(apiKey))
@@ -57,63 +51,70 @@ namespace CopilotCore
                     httpClient.DefaultRequestHeaders.Add("HTTP-Referer", "https://solidworks-copilot.local");
                     httpClient.DefaultRequestHeaders.Add("X-Title", "SOLIDWORKS AI Copilot");
                     break;
-
                 case "openai":
                     modelEndpoint = "https://api.openai.com/v1/chat/completions";
                     if (!string.IsNullOrEmpty(apiKey))
                         httpClient.DefaultRequestHeaders.Add("Authorization", "Bearer " + apiKey);
                     break;
-
                 default:
                     throw new ArgumentException("Unknown provider: " + provider);
             }
         }
 
-        public async Task<(bool ok, string error)> ValidateKeyAsync()
+        /// <summary>
+        /// Validates the current API key against the provider.
+        /// Returns three values:
+        ///   ok          — true if the key is accepted.
+        ///   isAuthError — true only on a definitive 401/403 rejection.
+        ///                 false for timeouts, DNS failures, or any other
+        ///                 network-level problem so callers can distinguish
+        ///                 "bad key" from "bad network".
+        ///   error       — human-readable error string when ok is false.
+        /// </summary>
+        public async Task<(bool ok, bool isAuthError, string error)> ValidateKeyAsync()
         {
             try
             {
-                string body;
-                string endpoint;
-
+                string body, endpoint;
                 if (provider == "anthropic")
                 {
                     endpoint = "https://api.anthropic.com/v1/messages";
-                    body = "{\"model\":\"claude-3-haiku-20240307\",\"max_tokens\":1," +
-                               "\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}";
+                    body = "{\"model\":\"claude-3-haiku-20240307\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}";
                 }
                 else
                 {
-                    endpoint = (provider == "openrouter") ? OpenRouterEndpoint : "https://api.openai.com/v1/chat/completions";
-                    string model = (provider == "openrouter") ? OpenRouterModel : "gpt-4o-mini";
-                    body = "{\"model\":\"" + model + "\",\"max_tokens\":1," +
-                           "\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}";
+                    endpoint = provider == "openrouter" ? OpenRouterEndpoint : "https://api.openai.com/v1/chat/completions";
+                    string model = provider == "openrouter" ? OpenRouterModel : "gpt-4o-mini";
+                    body = "{\"model\":\"" + model + "\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}";
                 }
 
-                var content = new StringContent(body, Encoding.UTF8, "application/json");
-                var response = await httpClient.PostAsync(endpoint, content);
+                var response = await httpClient.PostAsync(endpoint,
+                    new StringContent(body, Encoding.UTF8, "application/json"));
 
-                if (response.IsSuccessStatusCode) return (true, null);
+                if (response.IsSuccessStatusCode) return (true, false, null);
 
+                int code = (int)response.StatusCode;
+                bool isAuth = code == 401 || code == 403;
                 var raw = await response.Content.ReadAsStringAsync();
-                return (false, ExtractApiError(raw, (int)response.StatusCode));
+                return (false, isAuth, ExtractApiError(raw, code));
             }
-            catch (TaskCanceledException) { return (false, "Request timed out"); }
-            catch (Exception ex) { return (false, ex.Message); }
+            catch (TaskCanceledException) { return (false, false, "Request timed out"); }
+            catch (Exception ex) { return (false, false, ex.Message); }
         }
 
-        // ── Clarification ─────────────────────────────────────────────────────
+        // ── Clarification (Sprint 2: accepts optional image) ──────────────────
 
-        public async Task<ClarificationResponse> ClarifyGoalAsync(string designGoal)
+        public async Task<ClarificationResponse> ClarifyGoalAsync(
+            string designGoal,
+            string imageBase64 = null,
+            string imageMediaType = null)
         {
             try
             {
                 var promptJson = PromptBuilder.BuildClarificationPrompt(designGoal);
                 var cheapModel = GetClarifyModel();
 
-                // Use raw call — bypasses ParseResponse which only reads steps/confidence
-                // and would discard needs_clarification / questions fields entirely
-                var rawText = await CallLLMRawAsync(promptJson, cheapModel);
+                var rawText = await CallLLMRawAsync(promptJson, cheapModel, imageBase64, imageMediaType);
 
                 if (string.IsNullOrEmpty(rawText))
                     return new ClarificationResponse { NeedsClarification = false, SkipReason = "Empty response" };
@@ -139,15 +140,19 @@ namespace CopilotCore
         }
 
         /// <summary>
-        /// Calls the LLM and returns the raw extracted text content only —
-        /// no AiResponse wrapping, no steps parsing.
-        /// Used for clarification so the JSON fields are not discarded.
+        /// Raw LLM call that returns extracted text content only.
+        /// Used for clarification to avoid ParseResponse discarding non-step fields.
+        /// Supports optional image injection (Sprint 2).
         /// </summary>
-        private async Task<string> CallLLMRawAsync(string promptJson, string forceModel)
+        private async Task<string> CallLLMRawAsync(
+            string promptJson,
+            string forceModel,
+            string imageBase64 = null,
+            string imageMediaType = null)
         {
             try
             {
-                var requestBody = BuildRequestBody(promptJson, forceModel);
+                var requestBody = BuildRequestBody(promptJson, forceModel, imageBase64, imageMediaType);
                 var content = new StringContent(requestBody, Encoding.UTF8, "application/json");
 
                 logger?.LogApiCall("Clarify_Raw", promptJson);
@@ -172,22 +177,17 @@ namespace CopilotCore
         }
 
         /// <summary>
-        /// Extracts the text string from either Anthropic or OpenAI/OpenRouter response format.
+        /// Extracts text from Anthropic or OpenAI/OpenRouter response envelope.
         /// </summary>
         private string ExtractTextContent(string json)
         {
             try
             {
                 var root = JObject.Parse(json);
-
-                // Anthropic format: { "content": [ { "type": "text", "text": "..." } ] }
                 var anthropicText = root["content"]?[0]?["text"]?.ToString();
                 if (!string.IsNullOrEmpty(anthropicText)) return anthropicText.Trim();
-
-                // OpenAI / OpenRouter format: { "choices": [ { "message": { "content": "..." } } ] }
                 var openAiText = root["choices"]?[0]?["message"]?["content"]?.ToString();
                 if (!string.IsNullOrEmpty(openAiText)) return openAiText.Trim();
-
                 return null;
             }
             catch { return null; }
@@ -197,24 +197,18 @@ namespace CopilotCore
         {
             try
             {
-                // Strip markdown fences if model ignored instructions
                 text = text.Trim();
                 if (text.StartsWith("```"))
                 {
-                    int firstNewline = text.IndexOf('\n');
-                    if (firstNewline > 0) text = text.Substring(firstNewline + 1);
-                    int lastFence = text.LastIndexOf("```");
-                    if (lastFence >= 0) text = text.Substring(0, lastFence);
+                    int fn = text.IndexOf('\n');
+                    if (fn > 0) text = text.Substring(fn + 1);
+                    int lf = text.LastIndexOf("```");
+                    if (lf >= 0) text = text.Substring(0, lf);
                     text = text.Trim();
                 }
+                int js = text.IndexOf('{'), je = text.LastIndexOf('}');
+                if (js >= 0 && je > js) text = text.Substring(js, je - js + 1);
 
-                // Extract outermost JSON object
-                int jsonStart = text.IndexOf('{');
-                int jsonEnd = text.LastIndexOf('}');
-                if (jsonStart >= 0 && jsonEnd > jsonStart)
-                    text = text.Substring(jsonStart, jsonEnd - jsonStart + 1);
-
-                // Use snake_case deserialization to match LLM output field names
                 var settings = new JsonSerializerSettings
                 {
                     ContractResolver = new Newtonsoft.Json.Serialization.DefaultContractResolver
@@ -227,7 +221,6 @@ namespace CopilotCore
                 if (result == null)
                     return new ClarificationResponse { NeedsClarification = false, SkipReason = "Deserialize returned null" };
 
-                // Safety: treat empty questions array as no clarification needed
                 if (result.NeedsClarification &&
                     (result.Questions == null || result.Questions.Length == 0))
                 {
@@ -247,20 +240,28 @@ namespace CopilotCore
             }
         }
 
-        // ── Step generation ───────────────────────────────────────────────────
+        // ── Step generation (Sprint 2: image flows via WorkspaceContext) ──────
 
-        public async Task<AiResponse> GenerateStepsAsync(WorkspaceContext context,
-            string clarificationAnswers = null, string resolvedContext = null)
+        public async Task<AiResponse> GenerateStepsAsync(
+            WorkspaceContext context,
+            string clarificationAnswers = null,
+            string resolvedContext = null)
         {
+            // Image is carried inside context.ImageBase64 / context.ImageMediaType
             var response = await CallLLMAsync(
-                PromptBuilder.BuildModeAPrompt(context, clarificationAnswers, resolvedContext), "ModeA");
+                PromptBuilder.BuildModeAPrompt(context, clarificationAnswers, resolvedContext),
+                "ModeA",
+                imageBase64: context.ImageBase64,
+                imageMediaType: context.ImageMediaType);
 
-            // If schema fails, retry once with the same prompt
             if (response.Steps != null && !ValidateStepSchema(response))
             {
                 logger?.LogError("Schema validation failed on first attempt — retrying...", null);
                 response = await CallLLMAsync(
-                    PromptBuilder.BuildModeAPrompt(context, clarificationAnswers, resolvedContext), "ModeA_Retry");
+                    PromptBuilder.BuildModeAPrompt(context, clarificationAnswers, resolvedContext),
+                    "ModeA_Retry",
+                    imageBase64: context.ImageBase64,
+                    imageMediaType: context.ImageMediaType);
             }
 
             if (response.Steps != null && !ValidateStepSchema(response))
@@ -282,9 +283,7 @@ namespace CopilotCore
         {
             var verifyPrompt = new JObject
             {
-                ["system"] = "You are a SOLIDWORKS DFM reviewer. Return ONLY JSON. Check for:\n" +
-                             "1. Plane existence.\n2. Physical plausibility.\n" +
-                             "Do NOT change geometry.",
+                ["system"] = "You are a SOLIDWORKS DFM reviewer. Return ONLY JSON. Check for:\n1. Plane existence.\n2. Physical plausibility.\nDo NOT change geometry.",
                 ["user"] = JsonConvert.SerializeObject(new
                 {
                     steps = draft.Steps,
@@ -293,18 +292,22 @@ namespace CopilotCore
                 })
             }.ToString();
 
+            // Verification does not need the image — geometry check only
             var verifyResponse = await CallLLMAsync(verifyPrompt, "Verify", VerifyModel);
-
             return (verifyResponse.Steps != null && string.IsNullOrEmpty(verifyResponse.Error))
-                   ? verifyResponse
-                   : draft;
+                   ? verifyResponse : draft;
         }
 
-        private async Task<AiResponse> CallLLMAsync(string promptJson, string mode, string forceModel = null)
+        private async Task<AiResponse> CallLLMAsync(
+            string promptJson,
+            string mode,
+            string forceModel = null,
+            string imageBase64 = null,
+            string imageMediaType = null)
         {
             try
             {
-                var requestBody = BuildRequestBody(promptJson, forceModel);
+                var requestBody = BuildRequestBody(promptJson, forceModel, imageBase64, imageMediaType);
                 var content = new StringContent(requestBody, Encoding.UTF8, "application/json");
 
                 logger?.LogApiCall(mode, promptJson);
@@ -330,36 +333,91 @@ namespace CopilotCore
             }
         }
 
-        private string BuildRequestBody(string promptJson, string forceModel = null)
+        /// <summary>
+        /// Builds the provider-specific request body.
+        /// Sprint 2: when imageBase64 is supplied the user message becomes a
+        /// multipart content array [image_block, text_block] instead of a plain string,
+        /// using the vision format supported by Anthropic, OpenAI, and OpenRouter.
+        /// </summary>
+        private string BuildRequestBody(
+            string promptJson,
+            string forceModel = null,
+            string imageBase64 = null,
+            string imageMediaType = null)
         {
             var prompt = JObject.Parse(promptJson);
-            string systemMsg = prompt["system"]?.ToString()
-                               ?? "You are an expert SOLIDWORKS engineer. Return ONLY JSON.";
-            string userMsg = prompt["user"]?.ToString() ?? string.Empty;
+            string sysMsg = prompt["system"]?.ToString()
+                              ?? "You are an expert SOLIDWORKS engineer. Return ONLY JSON.";
+            string usrMsg = prompt["user"]?.ToString() ?? string.Empty;
 
             string selectedModel = forceModel
                                    ?? (provider == "openrouter" ? OpenRouterModel :
                                        provider == "anthropic" ? "claude-3-5-haiku-20241022" :
                                                                    "gpt-4o");
 
+            bool hasImage = !string.IsNullOrEmpty(imageBase64) && !string.IsNullOrEmpty(imageMediaType);
+
             if (provider == "anthropic")
             {
-                // Anthropic requires system at TOP LEVEL — NOT inside the messages array
+                JToken userContent;
+                if (hasImage)
+                {
+                    userContent = new JArray
+                    {
+                        new JObject
+                        {
+                            ["type"]   = "image",
+                            ["source"] = new JObject
+                            {
+                                ["type"]       = "base64",
+                                ["media_type"] = imageMediaType,
+                                ["data"]       = imageBase64
+                            }
+                        },
+                        new JObject { ["type"] = "text", ["text"] = usrMsg }
+                    };
+                }
+                else
+                {
+                    userContent = usrMsg;
+                }
+
                 return new JObject
                 {
                     ["model"] = selectedModel,
                     ["max_tokens"] = 4096,
                     ["temperature"] = 0,
-                    ["system"] = systemMsg,
+                    ["system"] = sysMsg,
                     ["messages"] = new JArray
                     {
-                        new JObject { ["role"] = "user", ["content"] = userMsg }
+                        new JObject { ["role"] = "user", ["content"] = userContent }
                     }
                 }.ToString();
             }
             else
             {
-                // OpenAI / OpenRouter format
+                JToken userContent;
+                if (hasImage)
+                {
+                    userContent = new JArray
+                    {
+                        new JObject
+                        {
+                            ["type"]      = "image_url",
+                            ["image_url"] = new JObject
+                            {
+                                ["url"]    = $"data:{imageMediaType};base64,{imageBase64}",
+                                ["detail"] = "high"
+                            }
+                        },
+                        new JObject { ["type"] = "text", ["text"] = usrMsg }
+                    };
+                }
+                else
+                {
+                    userContent = usrMsg;
+                }
+
                 return new JObject
                 {
                     ["model"] = selectedModel,
@@ -367,8 +425,8 @@ namespace CopilotCore
                     ["temperature"] = 0,
                     ["messages"] = new JArray
                     {
-                        new JObject { ["role"] = "system", ["content"] = systemMsg },
-                        new JObject { ["role"] = "user",   ["content"] = userMsg   }
+                        new JObject { ["role"] = "system", ["content"] = sysMsg },
+                        new JObject { ["role"] = "user",   ["content"] = userContent }
                     }
                 }.ToString();
             }
@@ -380,13 +438,12 @@ namespace CopilotCore
             {
                 var root = JObject.Parse(json);
 
-                // Truncation detection
                 var choices = root["choices"];
                 if (choices != null && choices.HasValues)
                 {
-                    string finishReason = choices[0]["finish_reason"]?.ToString()
-                                      ?? choices[0]["native_finish_reason"]?.ToString();
-                    if (finishReason == "length" || finishReason == "MAX_TOKENS")
+                    string fr = choices[0]["finish_reason"]?.ToString()
+                             ?? choices[0]["native_finish_reason"]?.ToString();
+                    if (fr == "length" || fr == "MAX_TOKENS")
                         return new AiResponse { Error = "Response cut off — model hit token limit.", RawResponse = json };
                 }
 
@@ -396,23 +453,19 @@ namespace CopilotCore
                 if (string.IsNullOrEmpty(content))
                     return new AiResponse { Error = "Empty response" };
 
-                // Clean JSON formatting
                 content = content.Trim();
                 if (content.StartsWith("```"))
                 {
-                    int firstNewline = content.IndexOf('\n');
-                    if (firstNewline > 0) content = content.Substring(firstNewline + 1);
-                    int lastFence = content.LastIndexOf("```");
-                    if (lastFence >= 0) content = content.Substring(0, lastFence);
+                    int fn = content.IndexOf('\n');
+                    if (fn > 0) content = content.Substring(fn + 1);
+                    int lf = content.LastIndexOf("```");
+                    if (lf >= 0) content = content.Substring(0, lf);
                 }
 
-                int jsonStart = content.IndexOf('{');
-                int jsonEnd = content.LastIndexOf('}');
-                if (jsonStart >= 0 && jsonEnd > jsonStart)
-                    content = content.Substring(jsonStart, jsonEnd - jsonStart + 1);
+                int js = content.IndexOf('{'), je = content.LastIndexOf('}');
+                if (js >= 0 && je > js) content = content.Substring(js, je - js + 1);
 
                 var parsed = JObject.Parse(content);
-
                 return new AiResponse
                 {
                     DesignLogic = parsed["design_logic"]?.ToString(),
@@ -432,25 +485,18 @@ namespace CopilotCore
         private bool ValidateStepSchema(AiResponse response)
         {
             if (response.Steps == null || response.Steps.Length == 0) return false;
-
-            var validFeatures = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            var valid = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                "Extrude", "Cut-Extrude", "Fillet", "Chamfer", "Shell",
-                "Revolve", "Hole", "LinearPattern", "CircularPattern", "Sweep", "Loft"
+                "Extrude","Cut-Extrude","Fillet","Chamfer","Shell",
+                "Revolve","Hole","LinearPattern","CircularPattern","Sweep","Loft"
             };
-
             foreach (var step in response.Steps)
             {
-                if (string.IsNullOrEmpty(step.Feature) || !validFeatures.Contains(step.Feature))
-                    return false;
-
-                if (step.Instructions == null || step.Instructions.Length < 1)
-                    return false;
-
+                if (string.IsNullOrEmpty(step.Feature) || !valid.Contains(step.Feature)) return false;
+                if (step.Instructions == null || step.Instructions.Length < 1) return false;
                 if (step.Parameters != null && step.Parameters.TryGetValue("depth_mm", out var d))
                 {
-                    try { if (Convert.ToDouble(d) < 0) return false; }
-                    catch { /* ignore parse errors on parameters */ }
+                    try { if (Convert.ToDouble(d) < 0) return false; } catch { }
                 }
             }
             return true;
@@ -461,8 +507,7 @@ namespace CopilotCore
             try
             {
                 var j = JObject.Parse(body);
-                var errorMsg = j["error"]?["message"]?.ToString() ?? j["message"]?.ToString();
-                return errorMsg ?? $"HTTP {statusCode}";
+                return j["error"]?["message"]?.ToString() ?? j["message"]?.ToString() ?? $"HTTP {statusCode}";
             }
             catch { return $"HTTP {statusCode}"; }
         }

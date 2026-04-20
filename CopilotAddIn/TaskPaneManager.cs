@@ -28,32 +28,22 @@ namespace CopilotAddIn
 
         public Action OnOpenSettings { get; set; }
 
-        // ── Win32 ─────────────────────────────────────────────────────────────
         [DllImport("user32.dll")] static extern IntPtr SetParent(IntPtr hWndChild, IntPtr hWndNewParent);
         [DllImport("user32.dll")] static extern bool ScreenToClient(IntPtr hWnd, ref POINT pt);
         [StructLayout(LayoutKind.Sequential)] struct POINT { public int X, Y; }
 
-        // ── Diagnostics ───────────────────────────────────────────────────────
         private static readonly string LogPath =
             Path.Combine(Path.GetTempPath(), "SW_Copilot_overlay.log");
         private static void Log(string msg)
         {
-            try
-            {
-                File.AppendAllText(LogPath,
-                    "[" + DateTime.Now.ToString("HH:mm:ss.fff") + "] " + msg + "\n");
-            }
+            try { File.AppendAllText(LogPath, "[" + DateTime.Now.ToString("HH:mm:ss.fff") + "] " + msg + "\n"); }
             catch { }
         }
 
         public TaskPaneManager(ISldWorks app, int id,
                                IWorkspaceScanner scan, AiClient client, SessionLogger log)
         {
-            swApp = app;
-            addInId = id;
-            scanner = scan;
-            aiClient = client;
-            logger = log;
+            swApp = app; addInId = id; scanner = scan; aiClient = client; logger = log;
         }
 
         public void CreateTaskPane()
@@ -68,10 +58,9 @@ namespace CopilotAddIn
             host = new ElementHost { Dock = DockStyle.Fill, Child = wpfPane };
             container = new System.Windows.Forms.UserControl();
             container.Controls.Add(host);
-            var _hnd = container.Handle; // force HWND
+            var _hnd = container.Handle;
 
-            string addinDir = Path.GetDirectoryName(
-                System.Reflection.Assembly.GetExecutingAssembly().Location);
+            string addinDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
             string icon16 = Path.Combine(addinDir, "copilot_icon.bmp");
 
             taskPaneView = (ITaskpaneView)swApp.CreateTaskpaneView2(
@@ -81,6 +70,7 @@ namespace CopilotAddIn
             goalOverlay = new GoalInputOverlay();
             goalOverlay.GoalTextChanged += OnOverlayTextChanged;
             goalOverlay.SubmitRequested += OnOverlaySubmitRequested;
+            goalOverlay.ImageAttachmentChanged += OnImageAttachmentChanged; // Sprint 2
 
             wpfPane.GetGoalText = () => goalOverlay.GoalText;
             wpfPane.RequestOverlayReposition = RepositionOverlay;
@@ -90,27 +80,25 @@ namespace CopilotAddIn
             wpfPane.HideClarificationQuestions = HideClarificationOverlay;
             wpfPane.GetClarificationAnswers = GetClarificationAnswers;
 
+            // Sprint 2: image delegates
+            wpfPane.GetAttachedImageBase64 = () => goalOverlay?.AttachedImageBase64;
+            wpfPane.GetAttachedImageMediaType = () => goalOverlay?.AttachedImageMediaType;
+
             poller = new PaneSizePoller(container, () =>
             {
                 wpfPane?.Dispatcher.Invoke(
                     () => { wpfPane.InvalidateMeasure(); wpfPane.UpdateLayout(); },
                     System.Windows.Threading.DispatcherPriority.Render);
-                wpfPane?.Dispatcher.BeginInvoke(
-                    new Action(() =>
-                    {
-                        RepositionOverlay();
-                        RepositionClarifyOverlay();
-                    }),
-                    System.Windows.Threading.DispatcherPriority.Background);
+                wpfPane?.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    RepositionOverlay();
+                    RepositionClarifyOverlay();
+                }), System.Windows.Threading.DispatcherPriority.Background);
             });
             poller.Start();
 
             var attachTimer = new System.Windows.Forms.Timer { Interval = 1000 };
-            attachTimer.Tick += (ts, te) =>
-            {
-                attachTimer.Stop(); attachTimer.Dispose();
-                AttachOverlayToContainer();
-            };
+            attachTimer.Tick += (ts, te) => { attachTimer.Stop(); attachTimer.Dispose(); AttachOverlayToContainer(); };
             attachTimer.Start();
         }
 
@@ -119,20 +107,10 @@ namespace CopilotAddIn
             try
             {
                 Log("AttachOverlayToContainer: start");
-                Log("  container.Handle     = " + container.Handle);
-                Log("  container.Size       = " + container.Width + "x" + container.Height);
-                Log("  container.Created    = " + container.IsHandleCreated);
-
                 goalOverlay.Show();
-                Log("  overlay.Handle       = " + goalOverlay.Handle);
-                Log("  overlay.Visible      = " + goalOverlay.Visible);
-
                 SetParent(goalOverlay.Handle, container.Handle);
-                Log("  SetParent done");
-
                 RepositionOverlay();
-                Log("  overlay bounds after = " + goalOverlay.Left + "," + goalOverlay.Top
-                    + " " + goalOverlay.Width + "x" + goalOverlay.Height);
+                Log("  done. bounds=" + goalOverlay.Left + "," + goalOverlay.Top + " " + goalOverlay.Width + "x" + goalOverlay.Height);
             }
             catch (Exception ex) { Log("  EXCEPTION: " + ex.Message); }
         }
@@ -141,33 +119,21 @@ namespace CopilotAddIn
         {
             try
             {
-                if (wpfPane == null || goalOverlay == null) return;
-                if (!container.IsHandleCreated) return;
+                if (wpfPane == null || goalOverlay == null || !container.IsHandleCreated) return;
 
                 System.Windows.Rect? screenRect = null;
-                wpfPane.Dispatcher.Invoke(() =>
-                {
-                    screenRect = wpfPane.GetGoalInputScreenRect();
-                }, System.Windows.Threading.DispatcherPriority.Render);
+                wpfPane.Dispatcher.Invoke(() => screenRect = wpfPane.GetGoalInputScreenRect(),
+                    System.Windows.Threading.DispatcherPriority.Render);
 
-                Log("  RepositionOverlay: screenRect = " + screenRect);
-
-                if (screenRect == null || screenRect.Value.IsEmpty) return;
-                if (screenRect.Value.Width < 10) return;
+                if (screenRect == null || screenRect.Value.IsEmpty || screenRect.Value.Width < 10) return;
 
                 var r = screenRect.Value;
                 var topLeft = new POINT { X = (int)r.Left, Y = (int)r.Top };
                 ScreenToClient(container.Handle, ref topLeft);
-
-                int w = (int)r.Width;
-                int h = (int)r.Height;
-
-                Log("  client coords: x=" + topLeft.X + " y=" + topLeft.Y
-                    + " w=" + w + " h=" + h);
+                int w = (int)r.Width, h = (int)r.Height;
 
                 if (container.InvokeRequired)
-                    container.Invoke(new Action(() =>
-                        goalOverlay.SetBounds(topLeft.X, topLeft.Y, w, h)));
+                    container.Invoke(new Action(() => goalOverlay.SetBounds(topLeft.X, topLeft.Y, w, h)));
                 else
                     goalOverlay.SetBounds(topLeft.X, topLeft.Y, w, h);
             }
@@ -177,15 +143,21 @@ namespace CopilotAddIn
         private void OnOverlayTextChanged(object sender, EventArgs e)
         {
             bool hasText = !string.IsNullOrWhiteSpace(goalOverlay.GoalText);
-            wpfPane?.Dispatcher.BeginInvoke(new Action(() =>
-                wpfPane.SetGenerateButtonEnabled(hasText)),
+            wpfPane?.Dispatcher.BeginInvoke(new Action(() => wpfPane.SetGenerateButtonEnabled(hasText)),
                 System.Windows.Threading.DispatcherPriority.Input);
         }
 
         private void OnOverlaySubmitRequested(object sender, EventArgs e)
         {
-            wpfPane?.Dispatcher.BeginInvoke(
-                new Action(() => wpfPane.TriggerGenerateSteps()),
+            wpfPane?.Dispatcher.BeginInvoke(new Action(() => wpfPane.TriggerGenerateSteps()),
+                System.Windows.Threading.DispatcherPriority.Input);
+        }
+
+        // Sprint 2: notify WPF badge when image attached/cleared
+        private void OnImageAttachmentChanged(object sender, EventArgs e)
+        {
+            bool hasImage = !string.IsNullOrEmpty(goalOverlay?.AttachedImageBase64);
+            wpfPane?.Dispatcher.BeginInvoke(new Action(() => wpfPane.SetImageAttached(hasImage)),
                 System.Windows.Threading.DispatcherPriority.Input);
         }
 
@@ -197,8 +169,7 @@ namespace CopilotAddIn
         {
             try
             {
-                if (clarifyOverlay != null && !clarifyOverlay.IsDisposed)
-                    clarifyOverlay.Dispose();
+                if (clarifyOverlay != null && !clarifyOverlay.IsDisposed) clarifyOverlay.Dispose();
 
                 clarifyOverlay = new ClarificationInputOverlay(questions);
                 clarifyOverlay.AnswersSubmitted += OnClarifyAnswersSubmitted;
@@ -208,13 +179,10 @@ namespace CopilotAddIn
                 int maxH = Math.Max(container.Height - 150, 200);
                 int h = Math.Min(preferredH, maxH);
 
-                // Full container width — no inset
                 clarifyOverlay.Size = new System.Drawing.Size(container.Width, h);
                 clarifyOverlay.AutoScroll = preferredH > h;
 
-                // Tell WPF to reserve exact height so overlay isn't clipped
-                wpfPane?.Dispatcher.Invoke(() =>
-                    wpfPane.SetClarificationPlaceholderHeight(h),
+                wpfPane?.Dispatcher.Invoke(() => wpfPane.SetClarificationPlaceholderHeight(h),
                     System.Windows.Threading.DispatcherPriority.Render);
 
                 clarifyOverlay.Show();
@@ -222,8 +190,7 @@ namespace CopilotAddIn
                 clarifyOverlay.BringToFront();
                 RepositionClarifyOverlay();
 
-                Log("  Clarification overlay shown, questions: " + questions.Length
-                    + " preferredH=" + preferredH + " h=" + h);
+                Log("  Clarification overlay shown q=" + questions.Length + " h=" + h);
             }
             catch (Exception ex) { Log("  ShowClarificationOverlay EXCEPTION: " + ex.Message); }
         }
@@ -234,9 +201,7 @@ namespace CopilotAddIn
             {
                 if (clarifyOverlay != null && !clarifyOverlay.IsDisposed)
                 {
-                    clarifyOverlay.Hide();
-                    clarifyOverlay.Dispose();
-                    clarifyOverlay = null;
+                    clarifyOverlay.Hide(); clarifyOverlay.Dispose(); clarifyOverlay = null;
                     Log("  Clarification overlay hidden");
                 }
             }
@@ -247,135 +212,92 @@ namespace CopilotAddIn
         {
             try
             {
-                if (wpfPane == null || clarifyOverlay == null) return;
-                if (!container.IsHandleCreated) return;
+                if (wpfPane == null || clarifyOverlay == null || !container.IsHandleCreated) return;
                 if (clarifyOverlay.IsDisposed) return;
 
                 System.Windows.Rect? screenRect = null;
-                wpfPane.Dispatcher.Invoke(() =>
-                {
-                    screenRect = wpfPane.GetClarificationScreenRect();
-                }, System.Windows.Threading.DispatcherPriority.Render);
+                wpfPane.Dispatcher.Invoke(() => screenRect = wpfPane.GetClarificationScreenRect(),
+                    System.Windows.Threading.DispatcherPriority.Render);
 
-                if (screenRect == null || screenRect.Value.IsEmpty) return;
-                if (screenRect.Value.Width < 10) return;
+                if (screenRect == null || screenRect.Value.IsEmpty || screenRect.Value.Width < 10) return;
 
                 var r = screenRect.Value;
                 var topLeft = new POINT { X = (int)r.Left, Y = (int)r.Top };
                 ScreenToClient(container.Handle, ref topLeft);
-
-                // Full container width, correct Y from placeholder
-                int w = container.Width;
-                int h = clarifyOverlay.Height;
+                int w = container.Width, h = clarifyOverlay.Height;
 
                 if (container.InvokeRequired)
-                    container.Invoke(new Action(() =>
-                    {
-                        clarifyOverlay.SetBounds(0, topLeft.Y, w, h);
-                        clarifyOverlay.BringToFront();
-                    }));
+                    container.Invoke(new Action(() => { clarifyOverlay.SetBounds(0, topLeft.Y, w, h); clarifyOverlay.BringToFront(); }));
                 else
-                {
-                    clarifyOverlay.SetBounds(0, topLeft.Y, w, h);
-                    clarifyOverlay.BringToFront();
-                }
+                { clarifyOverlay.SetBounds(0, topLeft.Y, w, h); clarifyOverlay.BringToFront(); }
             }
             catch (Exception ex) { Log("  RepositionClarifyOverlay EXCEPTION: " + ex.Message); }
         }
 
         public Dictionary<int, string> GetClarificationAnswers()
         {
-            try
-            {
-                return clarifyOverlay?.GetAnswers() ?? new Dictionary<int, string>();
-            }
+            try { return clarifyOverlay?.GetAnswers() ?? new Dictionary<int, string>(); }
             catch { return new Dictionary<int, string>(); }
         }
 
         private void OnClarifyAnswersSubmitted(object sender, EventArgs e)
         {
-            // 1. Snapshot answers NOW while overlay still exists and is not disposed
             var answers = clarifyOverlay?.GetAnswers() ?? new Dictionary<int, string>();
-
             wpfPane?.Dispatcher.BeginInvoke(new Action(() =>
             {
-                wpfPane.SetAnswerSnapshot(answers);              // 2. store snapshot
-                wpfPane.OnSubmitClarifyClicked();                // 3. set _clarificationSeen=true, bust cache
-                HideClarificationOverlay();                      // 4. dispose overlay
-                wpfPane.SetClarificationPlaceholderHeight(0);   // 5. collapse placeholder
-                wpfPane.TriggerGenerateSteps();                  // 6. generate — gate now bypassed
+                wpfPane.SetAnswerSnapshot(answers);
+                wpfPane.OnSubmitClarifyClicked();
+                HideClarificationOverlay();
+                wpfPane.SetClarificationPlaceholderHeight(0);
+                wpfPane.TriggerGenerateSteps();
             }), System.Windows.Threading.DispatcherPriority.Input);
         }
 
         private void OnClarifySkipped(object sender, EventArgs e)
         {
-            wpfPane?.Dispatcher.BeginInvoke(
-                new Action(() => wpfPane.OnSkipClarifyClicked()),
+            wpfPane?.Dispatcher.BeginInvoke(new Action(() => wpfPane.OnSkipClarifyClicked()),
                 System.Windows.Threading.DispatcherPriority.Input);
         }
 
         public void SetStatus(string text, bool showActionButton)
-        {
-            wpfPane?.Dispatcher.Invoke(() => wpfPane.SetStatus(text, showActionButton));
-        }
+            => wpfPane?.Dispatcher.Invoke(() => wpfPane.SetStatus(text, showActionButton));
 
         public void NotifyApiKeyReady()
-        {
-            wpfPane?.Dispatcher.Invoke(() =>
-                wpfPane.SetStatus("Ready — enter a design goal to begin.", false));
-        }
+            => wpfPane?.Dispatcher.Invoke(() => wpfPane.SetStatus("Ready — enter a design goal to begin.", false));
 
         public void ShowApiKeyMissingState()
-        {
-            wpfPane?.Dispatcher.Invoke(() =>
-                wpfPane.SetStatus("API key not set — click ⚙ to configure.", true));
-        }
+            => wpfPane?.Dispatcher.Invoke(() => wpfPane.SetStatus("API key not set — click ⚙ to configure.", true));
 
         public void ShowApiKeyInvalidState(string reason)
-        {
-            wpfPane?.Dispatcher.Invoke(() =>
-                wpfPane.SetStatus("API key invalid — click ⚙ to fix. (" + reason + ")", true));
-        }
+            => wpfPane?.Dispatcher.Invoke(() => wpfPane.SetStatus("API key invalid — click ⚙ to fix. (" + reason + ")", true));
 
         public void DestroyTaskPane()
         {
             poller?.Stop();
             if (goalOverlay != null && !goalOverlay.IsDisposed)
             {
-                if (goalOverlay.InvokeRequired)
-                    goalOverlay.Invoke(new Action(() => goalOverlay.Dispose()));
-                else
-                    goalOverlay.Dispose();
+                if (goalOverlay.InvokeRequired) goalOverlay.Invoke(new Action(() => goalOverlay.Dispose()));
+                else goalOverlay.Dispose();
                 goalOverlay = null;
             }
             HideClarificationOverlay();
             taskPaneView?.DeleteView();
         }
 
-        // ── PaneSizePoller ────────────────────────────────────────────────────
-
         private class PaneSizePoller
         {
             [DllImport("user32.dll")] static extern IntPtr GetParent(IntPtr hWnd);
             [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr hWnd, out RECT r);
-            [DllImport("user32.dll")]
-            static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int W, int H, bool repaint);
-
-            [StructLayout(LayoutKind.Sequential)]
-            struct RECT { public int Left, Top, Right, Bottom; }
+            [DllImport("user32.dll")] static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int W, int H, bool repaint);
+            [StructLayout(LayoutKind.Sequential)] struct RECT { public int Left, Top, Right, Bottom; }
 
             private readonly System.Windows.Forms.UserControl container;
             private readonly Action onResized;
             private readonly System.Windows.Forms.Timer timer;
             private int lastW = -1, lastH = -1;
 
-            public PaneSizePoller(System.Windows.Forms.UserControl ctrl, Action resizedCallback)
-            {
-                container = ctrl;
-                onResized = resizedCallback;
-                timer = new System.Windows.Forms.Timer { Interval = 200 };
-                timer.Tick += OnTick;
-            }
+            public PaneSizePoller(System.Windows.Forms.UserControl ctrl, Action cb)
+            { container = ctrl; onResized = cb; timer = new System.Windows.Forms.Timer { Interval = 200 }; timer.Tick += OnTick; }
 
             public void Start() => timer.Start();
             public void Stop() => timer.Stop();
@@ -384,17 +306,11 @@ namespace CopilotAddIn
             {
                 try
                 {
-                    IntPtr hwnd = container.Handle;
-                    IntPtr parent = GetParent(hwnd);
+                    IntPtr hwnd = container.Handle, parent = GetParent(hwnd);
                     if (parent == IntPtr.Zero) return;
-
                     GetClientRect(parent, out RECT r);
-                    int w = r.Right - r.Left;
-                    int h = r.Bottom - r.Top;
-
-                    if (w < 10 || h < 10) return;
-                    if (w == lastW && h == lastH) return;
-
+                    int w = r.Right - r.Left, h = r.Bottom - r.Top;
+                    if (w < 10 || h < 10 || (w == lastW && h == lastH)) return;
                     lastW = w; lastH = h;
                     MoveWindow(hwnd, 0, 0, w, h, true);
                     container.Size = new System.Drawing.Size(w, h);
