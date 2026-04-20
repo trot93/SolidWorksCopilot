@@ -8,6 +8,8 @@ namespace CopilotCore
 {
     public static class PromptBuilder
     {
+        // ── Mode A: Generate Steps (no clarification answers) ─────────────────
+
         public static string BuildModeAPrompt(WorkspaceContext context)
         {
             var systemPrompt = @"You are an expert, universal SOLIDWORKS CAD Engineer.
@@ -49,7 +51,6 @@ UNIVERSAL ENGINEERING GUIDELINES:
 
 Do not wrap the output in markdown code blocks. Output raw JSON only.";
 
-            // Ground dimensions with explicit context injection
             var bounds = DeriveBounds(context);
 
             var userContent = JsonConvert.SerializeObject(new
@@ -62,127 +63,13 @@ Do not wrap the output in markdown code blocks. Output raw JSON only.";
                 geometric_context = bounds
             }, Formatting.Indented);
 
-            return JsonConvert.SerializeObject(new
-            {
-                system = systemPrompt,
-                user = userContent
-            });
+            return JsonConvert.SerializeObject(new { system = systemPrompt, user = userContent });
         }
 
-        public static string BuildModeBPrompt(ErrorContext error)
-        {
-            var systemPrompt = @"You are an expert SOLIDWORKS API diagnostic engineer.
-Diagnose the following rebuild or topological failure and provide generalized CAD alternatives.
+        // ── Mode A: Generate Steps (with clarification answers) ───────────────
 
-Return ONLY valid JSON using this schema:
-{
-  ""error_diagnosis"": ""Clear explanation of the geometric or topological root cause (e.g., zero-thickness geometry, self-intersecting contour, missing reference)."",
-  ""alternatives"": [
-    {
-      ""approach"": ""Brief description of alternative method."",
-      ""instructions"": [
-        ""Step 1: specific corrective action"",
-        ""Step 2: what to select or change""
-      ],
-      ""reasoning"": ""Why this robustly avoids the previous failure."",
-      ""confidence"": ""high|medium|low""
-    }
-  ]
-}
-
-Do not wrap the output in markdown code blocks. Output raw JSON only.";
-
-            var userContent = JsonConvert.SerializeObject(new
-            {
-                error_message = error.ErrorMessage,
-                attempted_step = error.AttemptedStep,
-                feature_context = error.FeatureContext,
-                material = error.Material
-            }, Formatting.Indented);
-
-            return JsonConvert.SerializeObject(new
-            {
-                system = systemPrompt,
-                user = userContent
-            });
-        }
-
-        private static object DeriveBounds(WorkspaceContext context)
-        {
-            if (context.Features == null || context.Features.Count == 0)
-                return new { note = "No existing geometry — first feature establishes the base coordinate system and overall physical scale." };
-
-            var depths = new List<double>();
-            foreach (var f in context.Features)
-            {
-                if (f.Parameters != null && f.Parameters.TryGetValue("depth_mm", out var d))
-                {
-                    if (d is double dv) depths.Add(dv);
-                    else if (d is long lv) depths.Add((double)lv);
-                    else if (double.TryParse(d.ToString(), out double pv)) depths.Add(pv);
-                }
-            }
-
-            if (depths.Count == 0)
-                return new { note = "Existing features present but no extractable dimensions to establish scale." };
-
-            return new
-            {
-                largest_dimension_mm = depths.Max(),
-                smallest_dimension_mm = depths.Min(),
-                note = "Ensure all newly generated features are proportionally logical relative to these existing bounds."
-            };
-        }
-
-        // ── Sprint 1: Clarification Prompt ────────────────────────────────────
-
-        public static string BuildClarificationPrompt(string designGoal)
-        {
-            // Ultra-lean prompt — trusts LLM's own knowledge base
-            var systemPrompt = @"You are a SOLIDWORKS design intent clarifier.
-Analyze the user's goal. Use your own engineering knowledge — do NOT ask about standard specs you already know (NEMA motors, metric bolts, bearing codes, ISO extrusions, etc.).
-
-Only ask about genuine ambiguities:
-- Wall/material thickness if not stated
-- Load/force context (static vs dynamic?)
-- Mounting method (bolts, welds, adhesive?)
-- Operating environment if critical
-- Tolerances if functionally relevant
-
-Also extract any dimensions or specs already stated in the goal and note them as resolved_context.
-
-Ask MAX 2 questions. If clear enough, set needs_clarification=false.
-Return ONLY JSON. No markdown.
-
-Schema:
-{
-  ""needs_clarification"": true/false,
-  ""questions"": [
-    {
-      ""id"": 1,
-      ""question"": ""What mounting method do you need?"",
-      ""hint"": ""e.g., 4x M4 counterbored holes, or welded flange"",
-      ""suggested_values"": [""Bolted"", ""Welded"", ""Adhesive"", ""Press-fit""]
-    }
-  ],
-  ""resolved_context"": ""NEMA 17=42.3x42.3mm, user specified 5mm wall thickness, etc."",
-  ""skip_reason"": ""Only used when needs_clarification is false""
-}";
-
-            var userContent = JsonConvert.SerializeObject(new
-            {
-                goal = designGoal
-            }, Formatting.None);
-
-            return JsonConvert.SerializeObject(new
-            {
-                system = systemPrompt,
-                user = userContent
-            });
-        }
-
-        // Build enhanced Mode A prompt with clarification answers
-        public static string BuildModeAPrompt(WorkspaceContext context, string clarificationAnswers = null, string resolvedContext = null)
+        public static string BuildModeAPrompt(WorkspaceContext context,
+            string clarificationAnswers = null, string resolvedContext = null)
         {
             var systemPrompt = @"You are an expert, universal SOLIDWORKS CAD Engineer.
 Your goal is to translate abstract design intent into a highly efficient, logical SOLIDWORKS feature tree for ANY type of component (micro-mechanical, consumer goods, heavy machinery, or aerospace).
@@ -224,7 +111,6 @@ UNIVERSAL ENGINEERING GUIDELINES:
 
 Do not wrap the output in markdown code blocks. Output raw JSON only.";
 
-            // Ground dimensions with explicit context injection
             var bounds = DeriveBounds(context);
 
             var userContent = JsonConvert.SerializeObject(new
@@ -235,15 +121,128 @@ Do not wrap the output in markdown code blocks. Output raw JSON only.";
                 active_selection = context.ActiveSelection,
                 older_features_summary = context.OlderFeaturesSummary,
                 geometric_context = bounds,
-                resolved_context = resolvedContext, // Sprint 1: LLM's own resolved specs (NEMA dims, bolt sizes, etc.)
-                clarification_answers = clarificationAnswers // Sprint 1: user's answers to ambiguity questions
+                resolved_context = resolvedContext,       // LLM's own resolved specs
+                clarification_answers = clarificationAnswers  // user's answers to ambiguity questions
             }, Formatting.Indented);
 
-            return JsonConvert.SerializeObject(new
+            return JsonConvert.SerializeObject(new { system = systemPrompt, user = userContent });
+        }
+
+        // ── Mode B: Error resolution ──────────────────────────────────────────
+
+        public static string BuildModeBPrompt(ErrorContext error)
+        {
+            var systemPrompt = @"You are an expert SOLIDWORKS API diagnostic engineer.
+Diagnose the following rebuild or topological failure and provide generalized CAD alternatives.
+
+Return ONLY valid JSON using this schema:
+{
+  ""error_diagnosis"": ""Clear explanation of the geometric or topological root cause (e.g., zero-thickness geometry, self-intersecting contour, missing reference)."",
+  ""alternatives"": [
+    {
+      ""approach"": ""Brief description of alternative method."",
+      ""instructions"": [
+        ""Step 1: specific corrective action"",
+        ""Step 2: what to select or change""
+      ],
+      ""reasoning"": ""Why this robustly avoids the previous failure."",
+      ""confidence"": ""high|medium|low""
+    }
+  ]
+}
+
+Do not wrap the output in markdown code blocks. Output raw JSON only.";
+
+            var userContent = JsonConvert.SerializeObject(new
             {
-                system = systemPrompt,
-                user = userContent
-            });
+                error_message = error.ErrorMessage,
+                attempted_step = error.AttemptedStep,
+                feature_context = error.FeatureContext,
+                material = error.Material
+            }, Formatting.Indented);
+
+            return JsonConvert.SerializeObject(new { system = systemPrompt, user = userContent });
+        }
+
+        // ── Clarification prompt ──────────────────────────────────────────────
+
+        public static string BuildClarificationPrompt(string designGoal)
+        {
+            var systemPrompt = @"You are a SOLIDWORKS design intent clarifier.
+Analyze the user's goal. Use your own engineering knowledge — do NOT ask about standard specs you already know (NEMA motors, metric bolts, bearing codes, ISO extrusions, etc.).
+
+Only ask about genuine ambiguities:
+- Wall/material thickness if not stated
+- Load/force context (static vs dynamic?)
+- Mounting method (bolts, welds, adhesive?)
+- Operating environment if critical
+- Tolerances if functionally relevant
+
+Also extract any dimensions or specs already stated in the goal and note them as resolved_context.
+
+Ask between 2 and 3 questions. If the goal is fully unambiguous, set needs_clarification=false.
+IMPORTANT: When needs_clarification=true you MUST return a JSON array with 2-3 question objects.
+Return ONLY raw JSON. No markdown. No code fences.
+
+Schema (always include all three example questions when needs_clarification=true):
+{
+  ""needs_clarification"": true,
+  ""questions"": [
+    {
+      ""id"": 1,
+      ""question"": ""What mounting method do you need?"",
+      ""hint"": ""e.g., 4x M4 counterbored holes, or welded flange"",
+      ""suggested_values"": [""Bolted"", ""Welded"", ""Adhesive"", ""Press-fit""]
+    },
+    {
+      ""id"": 2,
+      ""question"": ""What wall thickness do you need?"",
+      ""hint"": ""e.g., 2mm for lightweight, 5mm for structural"",
+      ""suggested_values"": [""2mm"", ""3mm"", ""5mm"", ""8mm""]
+    },
+    {
+      ""id"": 3,
+      ""question"": ""What is the operating environment?"",
+      ""hint"": ""e.g., indoor static load, outdoor vibration, high temperature"",
+      ""suggested_values"": [""Indoor static"", ""Outdoor"", ""High vibration"", ""High temperature""]
+    }
+  ],
+  ""resolved_context"": ""Any specs already known from the goal, e.g. NEMA 17=42.3x42.3mm"",
+  ""skip_reason"": """"
+}";
+
+            var userContent = JsonConvert.SerializeObject(new { goal = designGoal }, Formatting.None);
+
+            return JsonConvert.SerializeObject(new { system = systemPrompt, user = userContent });
+        }
+
+        // ── Helpers ───────────────────────────────────────────────────────────
+
+        private static object DeriveBounds(WorkspaceContext context)
+        {
+            if (context.Features == null || context.Features.Count == 0)
+                return new { note = "No existing geometry — first feature establishes the base coordinate system and overall physical scale." };
+
+            var depths = new List<double>();
+            foreach (var f in context.Features)
+            {
+                if (f.Parameters != null && f.Parameters.TryGetValue("depth_mm", out var d))
+                {
+                    if (d is double dv) depths.Add(dv);
+                    else if (d is long lv) depths.Add((double)lv);
+                    else if (double.TryParse(d.ToString(), out double pv)) depths.Add(pv);
+                }
+            }
+
+            if (depths.Count == 0)
+                return new { note = "Existing features present but no extractable dimensions to establish scale." };
+
+            return new
+            {
+                largest_dimension_mm = depths.Max(),
+                smallest_dimension_mm = depths.Min(),
+                note = "Ensure all newly generated features are proportionally logical relative to these existing bounds."
+            };
         }
     }
 }

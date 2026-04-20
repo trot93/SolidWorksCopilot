@@ -19,7 +19,7 @@ namespace CopilotUI
         private string currentGoal;
         private CancellationTokenSource currentCts;
 
-        // Sprint 1: Clarification state
+        // Clarification state
         private ClarificationResponse _pendingClarification;
         private string _resolvedContext;
 
@@ -31,6 +31,9 @@ namespace CopilotUI
         private string _lastClarifiedGoal = null;
         private ClarificationResponse _cachedClarification = null;
 
+        // Snapshot of answers captured before overlay is disposed
+        private Dictionary<int, string> _snapshotAnswers;
+
         // Cache for direct card references
         private readonly List<StepCard> _stepCards = new List<StepCard>();
 
@@ -40,7 +43,7 @@ namespace CopilotUI
         public Action RequestOverlayReposition { get; set; }
         public Action RequestHostFocus { get; set; }
 
-        // Sprint 1: Clarification integration via delegates (set by TaskPaneManager)
+        // Clarification integration via delegates (set by TaskPaneManager)
         public Action<CopilotModels.ClarificationQuestion[]> DoShowClarificationQuestions { get; set; }
         public Action HideClarificationQuestions { get; set; }
         public Func<Dictionary<int, string>> GetClarificationAnswers { get; set; }
@@ -327,13 +330,26 @@ namespace CopilotUI
             ErrorDiagnosisText.Text = details;
         }
 
-        // ── Sprint 1: Clarification UI Methods ────────────────────────────────
+        // ── Clarification UI Methods ──────────────────────────────────────────
 
         private void ShowClarificationQuestions(ClarificationResponse clarification)
         {
             _pendingClarification = clarification;
             ClarificationPanel.Visibility = Visibility.Visible;
             DoShowClarificationQuestions?.Invoke(clarification.Questions);
+        }
+
+        /// <summary>
+        /// Called by TaskPaneManager when user clicks "Generate Steps with Answers".
+        /// Must be called BEFORE HideClarificationOverlay disposes the overlay.
+        /// Sets _clarificationSeen=true and busts cache so next session re-analyzes.
+        /// </summary>
+        public void OnSubmitClarifyClicked()
+        {
+            _clarificationSeen = true;
+            _lastClarifiedGoal = null;    // bust cache
+            _cachedClarification = null;
+            ClarificationPanel.Visibility = Visibility.Collapsed;
         }
 
         /// <summary>
@@ -349,18 +365,27 @@ namespace CopilotUI
                 SkipReason = "User skipped"
             };
             HideClarificationQuestions?.Invoke();
-
-            // Collapse the panel without nulling _pendingClarification or _clarificationSeen
             ClarificationPanel.Visibility = Visibility.Collapsed;
 
-            // Proceed directly to generation — _clarificationSeen=true means the
-            // clarification gate in OnGenerateStepsClick will be bypassed
+            // Proceed directly to generation — gate will be bypassed
             TriggerGenerateSteps();
+        }
+
+        /// <summary>
+        /// Stores a snapshot of answers captured by TaskPaneManager before the
+        /// overlay is disposed, so BuildClarificationAnswersString() can still read them.
+        /// </summary>
+        public void SetAnswerSnapshot(Dictionary<int, string> answers)
+        {
+            _snapshotAnswers = answers;
         }
 
         private string BuildClarificationAnswersString()
         {
-            var answers = GetClarificationAnswers?.Invoke();
+            // Prefer snapshot (set before overlay disposed), fall back to live delegate
+            var answers = _snapshotAnswers ?? GetClarificationAnswers?.Invoke();
+            _snapshotAnswers = null; // consume once
+
             if (answers == null || answers.Count == 0) return null;
 
             var parts = new List<string>();
@@ -370,7 +395,6 @@ namespace CopilotUI
                 var qText = question?.Question ?? $"Q{kvp.Key}";
                 parts.Add($"{qText}: {kvp.Value}");
             }
-
             return parts.Count > 0 ? string.Join("\n", parts) : null;
         }
 
@@ -403,6 +427,7 @@ namespace CopilotUI
             _clarificationSeen = false;
             _lastClarifiedGoal = null;
             _cachedClarification = null;
+            _snapshotAnswers = null;
         }
     }
 }

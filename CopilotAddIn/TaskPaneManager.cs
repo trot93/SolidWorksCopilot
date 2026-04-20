@@ -41,7 +41,7 @@ namespace CopilotAddIn
             try
             {
                 File.AppendAllText(LogPath,
-                "[" + DateTime.Now.ToString("HH:mm:ss.fff") + "] " + msg + "\n");
+                    "[" + DateTime.Now.ToString("HH:mm:ss.fff") + "] " + msg + "\n");
             }
             catch { }
         }
@@ -85,7 +85,7 @@ namespace CopilotAddIn
             wpfPane.GetGoalText = () => goalOverlay.GoalText;
             wpfPane.RequestOverlayReposition = RepositionOverlay;
 
-            // Sprint 1: Clarification delegates
+            // Clarification delegates
             wpfPane.DoShowClarificationQuestions = ShowClarificationOverlay;
             wpfPane.HideClarificationQuestions = HideClarificationOverlay;
             wpfPane.GetClarificationAnswers = GetClarificationAnswers;
@@ -191,7 +191,7 @@ namespace CopilotAddIn
 
         public void WireHostFocusToPane() { }
 
-        // ── Clarification overlay (Sprint 1) ──────────────────────────────────
+        // ── Clarification overlay ─────────────────────────────────────────────
 
         public void ShowClarificationOverlay(ClarificationQuestion[] questions)
         {
@@ -208,10 +208,11 @@ namespace CopilotAddIn
                 int maxH = Math.Max(container.Height - 150, 200);
                 int h = Math.Min(preferredH, maxH);
 
-                // Use FULL container width — no inset margin here
+                // Full container width — no inset
                 clarifyOverlay.Size = new System.Drawing.Size(container.Width, h);
                 clarifyOverlay.AutoScroll = preferredH > h;
 
+                // Tell WPF to reserve exact height so overlay isn't clipped
                 wpfPane?.Dispatcher.Invoke(() =>
                     wpfPane.SetClarificationPlaceholderHeight(h),
                     System.Windows.Threading.DispatcherPriority.Render);
@@ -220,6 +221,9 @@ namespace CopilotAddIn
                 SetParent(clarifyOverlay.Handle, container.Handle);
                 clarifyOverlay.BringToFront();
                 RepositionClarifyOverlay();
+
+                Log("  Clarification overlay shown, questions: " + questions.Length
+                    + " preferredH=" + preferredH + " h=" + h);
             }
             catch (Exception ex) { Log("  ShowClarificationOverlay EXCEPTION: " + ex.Message); }
         }
@@ -260,19 +264,19 @@ namespace CopilotAddIn
                 var topLeft = new POINT { X = (int)r.Left, Y = (int)r.Top };
                 ScreenToClient(container.Handle, ref topLeft);
 
-                // Fill the full container width, not just the placeholder width
+                // Full container width, correct Y from placeholder
                 int w = container.Width;
                 int h = clarifyOverlay.Height;
 
                 if (container.InvokeRequired)
                     container.Invoke(new Action(() =>
                     {
-                        clarifyOverlay.SetBounds(0, topLeft.Y, container.Width, clarifyOverlay.Height);
+                        clarifyOverlay.SetBounds(0, topLeft.Y, w, h);
                         clarifyOverlay.BringToFront();
                     }));
                 else
                 {
-                    clarifyOverlay.SetBounds(0, topLeft.Y, container.Width, clarifyOverlay.Height);
+                    clarifyOverlay.SetBounds(0, topLeft.Y, w, h);
                     clarifyOverlay.BringToFront();
                 }
             }
@@ -290,13 +294,16 @@ namespace CopilotAddIn
 
         private void OnClarifyAnswersSubmitted(object sender, EventArgs e)
         {
-            // Mark clarification as seen then hide overlay before triggering generation
+            // 1. Snapshot answers NOW while overlay still exists and is not disposed
+            var answers = clarifyOverlay?.GetAnswers() ?? new Dictionary<int, string>();
+
             wpfPane?.Dispatcher.BeginInvoke(new Action(() =>
             {
-                HideClarificationOverlay();
-                wpfPane.SetClarificationPlaceholderHeight(0);
-                // _clarificationSeen is set inside OnSkipClarifyClicked / here via delegate
-                wpfPane.TriggerGenerateSteps();
+                wpfPane.SetAnswerSnapshot(answers);              // 2. store snapshot
+                wpfPane.OnSubmitClarifyClicked();                // 3. set _clarificationSeen=true, bust cache
+                HideClarificationOverlay();                      // 4. dispose overlay
+                wpfPane.SetClarificationPlaceholderHeight(0);   // 5. collapse placeholder
+                wpfPane.TriggerGenerateSteps();                  // 6. generate — gate now bypassed
             }), System.Windows.Threading.DispatcherPriority.Input);
         }
 
@@ -345,13 +352,15 @@ namespace CopilotAddIn
             taskPaneView?.DeleteView();
         }
 
+        // ── PaneSizePoller ────────────────────────────────────────────────────
+
         private class PaneSizePoller
         {
             [DllImport("user32.dll")] static extern IntPtr GetParent(IntPtr hWnd);
             [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr hWnd, out RECT r);
             [DllImport("user32.dll")]
-            static extern bool MoveWindow(IntPtr hWnd, int X, int Y,
-                                          int W, int H, bool repaint);
+            static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int W, int H, bool repaint);
+
             [StructLayout(LayoutKind.Sequential)]
             struct RECT { public int Left, Top, Right, Bottom; }
 
