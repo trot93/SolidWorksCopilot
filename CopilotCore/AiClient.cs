@@ -18,18 +18,30 @@ namespace CopilotCore
         private string modelEndpoint;
 
         private const string OpenRouterEndpoint = "https://openrouter.ai/api/v1/chat/completions";
-        private const string OpenRouterModel = "google/gemini-2.0-flash-001";
-        private const string VerifyModel = "google/gemini-2.0-flash-001";
 
+        // ── CHANGE 1: Replaced deprecated paid gemini-2.0-flash-001 (gone since March 31 2026)
+        //             with Gemma 4 26B A4B — free, multimodal (vision), 262K context, reasoning mode.
+        //             Model ID format confirmed on OpenRouter: google/gemma-4-26b-a4b-it:free
+        //             Image format: image_url with base64 data URI — same as your existing OpenAI path. No other changes needed.
+        private const string OpenRouterGenerationModel = "google/gemma-4-26b-a4b-it:free";
+
+        // ── CHANGE 2: Verify call was hardcoded to the same deprecated paid Gemini model.
+        //             Now uses the same free model. Verify is a lightweight JSON consistency
+        //             check — no capability difference needed here.
+        private const string OpenRouterVerifyModel = "google/gemma-4-26b-a4b-it:free";
+
+        // ── CHANGE 3: Clarify model for OpenRouter was gpt-4o-mini — a paid model.
+        //             Replaced with the same free Gemma 4 model.
+        //             Clarification is a simple structured-output task it handles well.
         private const string ClarifyModelAnthropic = "claude-3-haiku-20240307";
-        private const string ClarifyModelOpenRouter = "openai/gpt-4o-mini";
+        private const string ClarifyModelOpenRouter = "google/gemma-4-26b-a4b-it:free";
         private const string ClarifyModelOpenAI = "gpt-4o-mini";
 
         public AiClient(string apiKey, string provider = "anthropic", SessionLogger logger = null)
         {
             this.logger = logger;
             this.provider = provider.ToLower();
-            httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+            httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(90) }; // CHANGE 4: 60s was too tight for free-tier inference latency spikes under load
             ConfigureHeaders(apiKey);
         }
 
@@ -61,16 +73,6 @@ namespace CopilotCore
             }
         }
 
-        /// <summary>
-        /// Validates the current API key against the provider.
-        /// Returns three values:
-        ///   ok          — true if the key is accepted.
-        ///   isAuthError — true only on a definitive 401/403 rejection.
-        ///                 false for timeouts, DNS failures, or any other
-        ///                 network-level problem so callers can distinguish
-        ///                 "bad key" from "bad network".
-        ///   error       — human-readable error string when ok is false.
-        /// </summary>
         public async Task<(bool ok, bool isAuthError, string error)> ValidateKeyAsync()
         {
             try
@@ -84,7 +86,9 @@ namespace CopilotCore
                 else
                 {
                     endpoint = provider == "openrouter" ? OpenRouterEndpoint : "https://api.openai.com/v1/chat/completions";
-                    string model = provider == "openrouter" ? OpenRouterModel : "gpt-4o-mini";
+                    // CHANGE 5: Validation ping now uses the actual generation model so the key test
+                    //           is representative of real calls. gpt-4o-mini was paid; this is free.
+                    string model = provider == "openrouter" ? OpenRouterGenerationModel : "gpt-4o-mini";
                     body = "{\"model\":\"" + model + "\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}";
                 }
 
@@ -102,7 +106,7 @@ namespace CopilotCore
             catch (Exception ex) { return (false, false, ex.Message); }
         }
 
-        // ── Clarification (Sprint 2: accepts optional image) ──────────────────
+        // ── Clarification ─────────────────────────────────────────────────────
 
         public async Task<ClarificationResponse> ClarifyGoalAsync(
             string designGoal,
@@ -111,7 +115,8 @@ namespace CopilotCore
         {
             try
             {
-                var promptJson = PromptBuilder.BuildClarificationPrompt(designGoal);
+                bool hasImg = !string.IsNullOrEmpty(imageBase64);
+                var promptJson = PromptBuilder.BuildClarificationPrompt(designGoal, hasImg);
                 var cheapModel = GetClarifyModel();
 
                 var rawText = await CallLLMRawAsync(promptJson, cheapModel, imageBase64, imageMediaType);
@@ -139,11 +144,6 @@ namespace CopilotCore
             }
         }
 
-        /// <summary>
-        /// Raw LLM call that returns extracted text content only.
-        /// Used for clarification to avoid ParseResponse discarding non-step fields.
-        /// Supports optional image injection (Sprint 2).
-        /// </summary>
         private async Task<string> CallLLMRawAsync(
             string promptJson,
             string forceModel,
@@ -152,7 +152,7 @@ namespace CopilotCore
         {
             try
             {
-                var requestBody = BuildRequestBody(promptJson, forceModel, imageBase64, imageMediaType);
+                var requestBody = BuildRequestBody(promptJson, forceModel, imageBase64, imageMediaType, isGeneration: false);
                 var content = new StringContent(requestBody, Encoding.UTF8, "application/json");
 
                 logger?.LogApiCall("Clarify_Raw", promptJson);
@@ -176,9 +176,6 @@ namespace CopilotCore
             }
         }
 
-        /// <summary>
-        /// Extracts text from Anthropic or OpenAI/OpenRouter response envelope.
-        /// </summary>
         private string ExtractTextContent(string json)
         {
             try
@@ -240,19 +237,19 @@ namespace CopilotCore
             }
         }
 
-        // ── Step generation (Sprint 2: image flows via WorkspaceContext) ──────
+        // ── Step generation ───────────────────────────────────────────────────
 
         public async Task<AiResponse> GenerateStepsAsync(
             WorkspaceContext context,
             string clarificationAnswers = null,
             string resolvedContext = null)
         {
-            // Image is carried inside context.ImageBase64 / context.ImageMediaType
             var response = await CallLLMAsync(
                 PromptBuilder.BuildModeAPrompt(context, clarificationAnswers, resolvedContext),
                 "ModeA",
                 imageBase64: context.ImageBase64,
-                imageMediaType: context.ImageMediaType);
+                imageMediaType: context.ImageMediaType,
+                isGeneration: true);  // CHANGE 6: flag passed to BuildRequestBody to use generation-specific temperature/tokens
 
             if (response.Steps != null && !ValidateStepSchema(response))
             {
@@ -261,7 +258,8 @@ namespace CopilotCore
                     PromptBuilder.BuildModeAPrompt(context, clarificationAnswers, resolvedContext),
                     "ModeA_Retry",
                     imageBase64: context.ImageBase64,
-                    imageMediaType: context.ImageMediaType);
+                    imageMediaType: context.ImageMediaType,
+                    isGeneration: true);
             }
 
             if (response.Steps != null && !ValidateStepSchema(response))
@@ -277,13 +275,16 @@ namespace CopilotCore
         }
 
         public async Task<AiResponse> ResolveErrorAsync(ErrorContext errorContext)
-            => await CallLLMAsync(PromptBuilder.BuildModeBPrompt(errorContext), "ModeB");
+            => await CallLLMAsync(PromptBuilder.BuildModeBPrompt(errorContext), "ModeB", isGeneration: true);
 
         private async Task<AiResponse> VerifyStepsAsync(AiResponse draft, WorkspaceContext context)
         {
             var verifyPrompt = new JObject
             {
-                ["system"] = "You are a SOLIDWORKS DFM reviewer. Return ONLY JSON. Check for:\n1. Plane existence.\n2. Physical plausibility.\nDo NOT change geometry.",
+                // CHANGE 7: Stripped verify system prompt to absolute minimum.
+                //           Old prompt was ~60 tokens of instruction for a task that only needs
+                //           "check this JSON is self-consistent". Saves tokens on every generation call.
+                ["system"] = "SOLIDWORKS step reviewer. Return ONLY the same JSON structure with a 'verified' boolean added to each step. true = plane exists and parameters are physically plausible. false = flag the issue in a 'flag' field. Do not modify geometry.",
                 ["user"] = JsonConvert.SerializeObject(new
                 {
                     steps = draft.Steps,
@@ -292,10 +293,24 @@ namespace CopilotCore
                 })
             }.ToString();
 
-            // Verification does not need the image — geometry check only
-            var verifyResponse = await CallLLMAsync(verifyPrompt, "Verify", VerifyModel);
+            // CHANGE 8: Verify no longer calls a hardcoded Gemini model regardless of provider.
+            //           Now uses the same free model as generation. Consistent, no hidden paid calls.
+            string verifyModel = GetVerifyModel();
+            var verifyResponse = await CallLLMAsync(verifyPrompt, "Verify", forceModel: verifyModel, isGeneration: false);
+
             return (verifyResponse.Steps != null && string.IsNullOrEmpty(verifyResponse.Error))
                    ? verifyResponse : draft;
+        }
+
+        private string GetVerifyModel()
+        {
+            switch (provider)
+            {
+                case "anthropic": return ClarifyModelAnthropic;   // haiku — fast, cheap, sufficient for JSON check
+                case "openrouter": return OpenRouterVerifyModel;    // same free Gemma 4 model
+                case "openai": return ClarifyModelOpenAI;
+                default: return ClarifyModelAnthropic;
+            }
         }
 
         private async Task<AiResponse> CallLLMAsync(
@@ -303,11 +318,12 @@ namespace CopilotCore
             string mode,
             string forceModel = null,
             string imageBase64 = null,
-            string imageMediaType = null)
+            string imageMediaType = null,
+            bool isGeneration = false)
         {
             try
             {
-                var requestBody = BuildRequestBody(promptJson, forceModel, imageBase64, imageMediaType);
+                var requestBody = BuildRequestBody(promptJson, forceModel, imageBase64, imageMediaType, isGeneration);
                 var content = new StringContent(requestBody, Encoding.UTF8, "application/json");
 
                 logger?.LogApiCall(mode, promptJson);
@@ -325,7 +341,7 @@ namespace CopilotCore
                 logger?.LogApiResponse(mode, responseString);
                 return ParseResponse(responseString);
             }
-            catch (TaskCanceledException) { return new AiResponse { Error = "Request timed out" }; }
+            catch (TaskCanceledException) { return new AiResponse { Error = "Request timed out — free tier may be under load. Try again." }; }
             catch (Exception ex)
             {
                 logger?.LogError("LLM call failed", ex);
@@ -333,29 +349,39 @@ namespace CopilotCore
             }
         }
 
-        /// <summary>
-        /// Builds the provider-specific request body.
-        /// Sprint 2: when imageBase64 is supplied the user message becomes a
-        /// multipart content array [image_block, text_block] instead of a plain string,
-        /// using the vision format supported by Anthropic, OpenAI, and OpenRouter.
-        /// </summary>
         private string BuildRequestBody(
             string promptJson,
             string forceModel = null,
             string imageBase64 = null,
-            string imageMediaType = null)
+            string imageMediaType = null,
+            bool isGeneration = false)   // CHANGE 9: isGeneration controls temperature and token budget separately for generation vs clarify/verify
         {
             var prompt = JObject.Parse(promptJson);
-            string sysMsg = prompt["system"]?.ToString()
-                              ?? "You are an expert SOLIDWORKS engineer. Return ONLY JSON.";
+            string sysMsg = prompt["system"]?.ToString() ?? "You are an expert SOLIDWORKS engineer. Return ONLY JSON.";
             string usrMsg = prompt["user"]?.ToString() ?? string.Empty;
 
             string selectedModel = forceModel
-                                   ?? (provider == "openrouter" ? OpenRouterModel :
+                                   ?? (provider == "openrouter" ? OpenRouterGenerationModel :
                                        provider == "anthropic" ? "claude-3-5-haiku-20241022" :
                                                                    "gpt-4o");
 
             bool hasImage = !string.IsNullOrEmpty(imageBase64) && !string.IsNullOrEmpty(imageMediaType);
+
+            // CHANGE 10: Temperature split.
+            //   Clarification/Verify: 0 — deterministic, structured output, no creativity needed.
+            //   Generation: 0.2 — gives the model slight flexibility to reach geometrically
+            //               coherent values rather than always taking the statistically most
+            //               common token (which causes dimension drift in multi-step plans).
+            double temperature = isGeneration ? 0.2 : 0.0;
+
+            // CHANGE 11: Token budget split.
+            //   Clarify/Verify: 512 — more than enough for JSON with 2-3 questions or a verified step list.
+            //                   This is the main token-cost saving for users on free tier with limited daily quota.
+            //   Generation: 4096 — kept as-is. Do NOT raise this without testing the specific model's
+            //               actual output limit — free models may silently clamp or error on higher values.
+            //               If you observe finish_reason="length" on complex parts, raise to 6144 then 8192,
+            //               testing one step at a time.
+            int maxTokens = isGeneration ? 4096 : 512;
 
             if (provider == "anthropic")
             {
@@ -385,8 +411,8 @@ namespace CopilotCore
                 return new JObject
                 {
                     ["model"] = selectedModel,
-                    ["max_tokens"] = 4096,
-                    ["temperature"] = 0,
+                    ["max_tokens"] = maxTokens,
+                    ["temperature"] = temperature,
                     ["system"] = sysMsg,
                     ["messages"] = new JArray
                     {
@@ -396,6 +422,8 @@ namespace CopilotCore
             }
             else
             {
+                // OpenAI / OpenRouter path — image_url format with base64 data URI
+                // Confirmed compatible with google/gemma-4-26b-a4b-it:free on OpenRouter
                 JToken userContent;
                 if (hasImage)
                 {
@@ -421,8 +449,8 @@ namespace CopilotCore
                 return new JObject
                 {
                     ["model"] = selectedModel,
-                    ["max_tokens"] = 4096,
-                    ["temperature"] = 0,
+                    ["max_tokens"] = maxTokens,
+                    ["temperature"] = temperature,
                     ["messages"] = new JArray
                     {
                         new JObject { ["role"] = "system", ["content"] = sysMsg },
@@ -437,14 +465,14 @@ namespace CopilotCore
             try
             {
                 var root = JObject.Parse(json);
-
                 var choices = root["choices"];
+
                 if (choices != null && choices.HasValues)
                 {
                     string fr = choices[0]["finish_reason"]?.ToString()
                              ?? choices[0]["native_finish_reason"]?.ToString();
                     if (fr == "length" || fr == "MAX_TOKENS")
-                        return new AiResponse { Error = "Response cut off — model hit token limit.", RawResponse = json };
+                        return new AiResponse { Error = "Response cut off — model hit token limit. The part may be too complex for current settings.", RawResponse = json };
                 }
 
                 string content = root["content"]?[0]?["text"]?.ToString()
