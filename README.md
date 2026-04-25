@@ -1,4 +1,5 @@
-<img width="1918" height="1020" alt="image" src="https://github.com/user-attachments/assets/05455a63-cca2-44f5-adfa-18071d0b87b6" />
+<img width="1918" height="1021" alt="AI-Copilot_SW" src="https://github.com/user-attachments/assets/3d038303-f234-4c80-a09c-a979c80056a1" />
+
 
 ## Roadmap
 
