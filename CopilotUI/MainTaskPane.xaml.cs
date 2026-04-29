@@ -27,6 +27,12 @@ namespace CopilotUI
         private ClarificationResponse _cachedClarification = null;
         private Dictionary<int, string> _snapshotAnswers;
 
+        // Image context state — extracted once per generation cycle, reused across calls
+        // imageContext is the structured JSON from ExtractImageContextAsync.
+        // It is cached alongside the clarification cache so we don't re-extract on retry.
+        private string _imageContext = null;
+        private string _lastImageBase64Hash = null;   // detect when image changes so cache is busted
+
         // Step cards cache
         private readonly List<StepCard> _stepCards = new List<StepCard>();
 
@@ -41,7 +47,7 @@ namespace CopilotUI
         public Action HideClarificationQuestions { get; set; }
         public Func<Dictionary<int, string>> GetClarificationAnswers { get; set; }
 
-        // Sprint 2: image delegates — set by TaskPaneManager
+        // Image delegates — set by TaskPaneManager
         public Func<string> GetAttachedImageBase64 { get; set; }
         public Func<string> GetAttachedImageMediaType { get; set; }
 
@@ -87,19 +93,19 @@ namespace CopilotUI
 
         public void SetGenerateButtonEnabled(bool enabled) => SubmitGoalBtn.IsEnabled = enabled;
 
-        /// <summary>
-        /// Sprint 2: shows/hides the image badge below the goal input box.
-        /// Called by TaskPaneManager.OnImageAttachmentChanged.
-        /// </summary>
         public void SetImageAttached(bool attached)
         {
             ImageBadge.Visibility = attached ? Visibility.Visible : Visibility.Collapsed;
-            // Bust clarification cache when image changes — new context = new questions
+
+            // Bust both clarification cache AND image context cache when image changes.
+            // New image = new context = questions may differ.
             if (!attached || _lastClarifiedGoal != null)
             {
                 _lastClarifiedGoal = null;
                 _cachedClarification = null;
                 _clarificationSeen = false;
+                _imageContext = null;
+                _lastImageBase64Hash = null;
             }
         }
 
@@ -160,11 +166,48 @@ namespace CopilotUI
             ErrorPanel.Visibility = Visibility.Collapsed;
             EmptyState.Visibility = Visibility.Collapsed;
 
-            // Sprint 2: collect image once per generation cycle
+            // Collect image for this generation cycle
             string imageBase64 = GetAttachedImageBase64?.Invoke();
             string imageMediaType = GetAttachedImageMediaType?.Invoke();
+            bool hasImage = !string.IsNullOrEmpty(imageBase64);
 
-            // ── Clarification gate ────────────────────────────────────────────
+            // ── STEP 0: Image extraction ──────────────────────────────────────
+            // Run once per unique image per session. Result is cached in _imageContext
+            // so clarification and generation both receive the same structured facts.
+            // Uses a simple hash (length + first 32 chars) to detect image changes
+            // without storing the full base64 string twice.
+            if (hasImage)
+            {
+                string imageHash = imageBase64.Length + "_" +
+                    imageBase64.Substring(0, Math.Min(32, imageBase64.Length));
+
+                if (_imageContext == null || _lastImageBase64Hash != imageHash)
+                {
+                    SetStatus("Analysing image…", false);
+                    SetProgressVisible(true);
+
+                    _imageContext = await aiClient.ExtractImageContextAsync(
+                        goal, imageBase64, imageMediaType);
+
+                    if (token.IsCancellationRequested) return;
+
+                    // Cache the hash so we don't re-extract on retry or re-submit
+                    _lastImageBase64Hash = imageHash;
+
+                    logger?.LogApiResponse("ImageExtract",
+                        _imageContext ?? "no useful info extracted");
+                }
+            }
+            else
+            {
+                // No image attached — clear any stale image context from a previous session
+                _imageContext = null;
+                _lastImageBase64Hash = null;
+            }
+
+            // ── STEP 1: Clarification gate ────────────────────────────────────
+            // Clarification now receives imageContext as structured text.
+            // The model uses it to eliminate questions the image already answers.
             if (!_clarificationSeen)
             {
                 SetStatus("Analyzing design goal…", false);
@@ -178,8 +221,14 @@ namespace CopilotUI
                 }
                 else
                 {
-                    // Pass image into clarification so questions can reference it
-                    clarification = await aiClient.ClarifyGoalAsync(goal, imageBase64, imageMediaType);
+                    // Pass imageContext (structured JSON) — NOT raw image bytes.
+                    // ClarifyGoalAsync no longer needs vision capability for the image.
+                    clarification = await aiClient.ClarifyGoalAsync(
+                        goal,
+                        imageBase64: null,          // raw image no longer passed here
+                        imageMediaType: null,
+                        imageContext: _imageContext); // structured facts instead
+
                     if (token.IsCancellationRequested) return;
                     _lastClarifiedGoal = goal;
                     _cachedClarification = clarification;
@@ -208,21 +257,33 @@ namespace CopilotUI
                 var context = scanner.ScanWorkspace(currentGoal);
                 if (token.IsCancellationRequested) return;
 
-                // Sprint 2: attach image to context so GenerateStepsAsync can send it
+                // Raw image is still attached to context so it stays available
+                // for any future use (e.g. populated workspace path that skips geometry lock).
+                // GenerateStepsAsync now receives imageContext separately and uses it
+                // for the geometry lock call — the generation call itself gets no raw image.
                 context.ImageBase64 = imageBase64;
                 context.ImageMediaType = imageMediaType;
 
                 string clarificationAnswers = BuildClarificationAnswersString();
 
                 SetStatus("Waiting for AI…", false);
-                var response = await aiClient.GenerateStepsAsync(context, clarificationAnswers, _resolvedContext);
+
+                // Pass imageContext so GenerateStepsAsync can inject it into geometry lock.
+                // The generation model (DeepSeek) reads structured facts — no vision needed.
+                var response = await aiClient.GenerateStepsAsync(
+                    context,
+                    clarificationAnswers,
+                    _resolvedContext,
+                    _imageContext);        // structured image facts
+
                 if (token.IsCancellationRequested) return;
 
                 SetProgressVisible(false);
 
                 if (!string.IsNullOrEmpty(response.Error))
                 {
-                    bool isAuthError = response.Error.Contains("401") || response.Error.Contains("Authentication");
+                    bool isAuthError = response.Error.Contains("401") ||
+                                       response.Error.Contains("Authentication");
                     SetStatus(isAuthError ? "API key error — click Fix key" : "Error generating steps", isAuthError);
                     ShowInlineError(response.Error, response.RawResponse ?? "No details available");
                     EmptyState.Visibility = Visibility.Visible;
@@ -390,13 +451,17 @@ namespace CopilotUI
         private void ResetClarificationState()
         {
             ClarificationPanel.Visibility = Visibility.Collapsed;
-            ImageBadge.Visibility = Visibility.Collapsed; // Sprint 2
+            ImageBadge.Visibility = Visibility.Collapsed;
             _pendingClarification = null;
             _resolvedContext = null;
             _clarificationSeen = false;
             _lastClarifiedGoal = null;
             _cachedClarification = null;
             _snapshotAnswers = null;
+
+            // Also clear image context cache on full reset
+            _imageContext = null;
+            _lastImageBase64Hash = null;
         }
     }
 }

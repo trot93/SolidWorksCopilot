@@ -46,8 +46,10 @@ namespace CopilotAddIn
         private static readonly int CardPad = 12;
         private static readonly int SidePad = 12;
 
-        // Font used for the question label — defined once so MeasureText is consistent
+        // ── Fonts defined once so MeasureText and rendering always match ──────
         private static readonly Font QuestionFont = new Font("Segoe UI", 10f, FontStyle.Bold);
+        private static readonly Font HintFont = new Font("Segoe UI", 8f);
+        private static readonly Font SuggFont = new Font("Segoe UI", 8f, FontStyle.Bold);
 
         public ClarificationInputOverlay(ClarificationQuestion[] questions)
         {
@@ -87,6 +89,7 @@ namespace CopilotAddIn
             _answerBoxes.Clear();
 
             int cardW = w - SidePad * 2;
+            int innerW = cardW - CardPad * 2;
 
             // ── Header ────────────────────────────────────────────────────────
             var header = new Panel
@@ -162,7 +165,7 @@ namespace CopilotAddIn
             int y = 78;
             foreach (var q in _questions)
             {
-                var card = BuildQuestionCard(q, cardW);
+                var card = BuildQuestionCard(q, cardW, innerW);
                 card.Location = new Point(SidePad, y);
                 _scrollPanel.Controls.Add(card);
                 y += card.Height + 8;
@@ -192,8 +195,8 @@ namespace CopilotAddIn
             _submitBtn.Paint += PaintSubmitBtn;
             _scrollPanel.Controls.Add(_submitBtn);
 
-            // Recalculate preferred height now that we know actual card heights
-            _calculatedHeight = y + 6 + 34 + 8; // cards end + btn top margin + btn height + bottom pad
+            // Always accurate — computed after all cards are built with real heights
+            _calculatedHeight = y + 6 + 34 + 8;
         }
 
         protected override void OnLayout(LayoutEventArgs e)
@@ -203,32 +206,43 @@ namespace CopilotAddIn
                 BuildContent();
         }
 
-        private DoubleBufferedPanel BuildQuestionCard(ClarificationQuestion question, int cardW)
+        /// <summary>
+        /// Measures text height at a fixed width using TextRenderer (matches GDI rendering).
+        /// Returns the measured height plus an optional vertical gap beneath it.
+        /// Returns 0 for null/empty strings so callers can skip absent rows cleanly.
+        /// </summary>
+        private static int MeasureH(string text, Font font, int maxWidth, int gap = 4)
         {
-            int innerW = cardW - CardPad * 2;
+            if (string.IsNullOrEmpty(text)) return 0;
+            return TextRenderer.MeasureText(
+                text,
+                font,
+                new Size(maxWidth, int.MaxValue),
+                TextFormatFlags.WordBreak).Height + gap;
+        }
 
-            // ── Measure how tall the question text actually needs to be ────────
-            // TextRenderer.MeasureText respects word-wrap at the given width,
-            // so long questions get the height they need instead of being clipped.
-            int questionLabelH = TextRenderer.MeasureText(
-                $"Q{question.Id}. {question.Question}",
-                QuestionFont,
-                new Size(innerW, int.MaxValue),          // constrain width, free height
-                TextFormatFlags.WordBreak).Height;
+        private DoubleBufferedPanel BuildQuestionCard(
+            ClarificationQuestion question, int cardW, int innerW)
+        {
+            // ── Measure every text row at the real inner width ────────────────
+            int questionH = MeasureH(
+                $"Q{question.Id}. {question.Question}", QuestionFont, innerW);
 
-            // ── Accumulate total card height based on real content ────────────
-            int qh = CardPad;                            // top padding
-            qh += questionLabelH;                        // variable-height question text
-            qh += 4;                                     // gap after question
+            int hintH = MeasureH(question.Hint, HintFont, innerW);
 
-            if (!string.IsNullOrEmpty(question.Hint))
-                qh += 16;                                // hint row
+            string suggText = (question.SuggestedValues != null &&
+                               question.SuggestedValues.Length > 0)
+                              ? "Suggestions: " + string.Join("  ·  ", question.SuggestedValues)
+                              : null;
+            int suggH = MeasureH(suggText, SuggFont, innerW);
 
-            if (question.SuggestedValues != null && question.SuggestedValues.Length > 0)
-                qh += 16;                                // suggestions row
-
-            qh += 30;                                    // input box
-            qh += CardPad;                               // bottom padding
+            // ── Total card height: padding + measured rows + input ────────────
+            int qh = CardPad      // top padding
+                   + questionH    // question text  (1..n lines)
+                   + hintH        // hint row       (0 if absent)
+                   + suggH        // suggestions    (0 if absent)
+                   + 30           // answer input box
+                   + CardPad;     // bottom padding
 
             var card = new DoubleBufferedPanel
             {
@@ -240,60 +254,56 @@ namespace CopilotAddIn
             card.Paint += (s, e) =>
             {
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                var r = new Rectangle(0, 0, cardW - 1, qh - 1);
                 using (var pen = new Pen(ColBorder, 1f))
-                    DrawRoundRect(e.Graphics, pen, r, CornerRadius);
+                    DrawRoundRect(e.Graphics, pen,
+                        new Rectangle(0, 0, cardW - 1, qh - 1), CornerRadius);
             };
 
             int cy = CardPad;
 
-            // ── Question label — multi-line, exact measured height ────────────
-            var qLabel = new Label
+            // ── Question label ────────────────────────────────────────────────
+            card.Controls.Add(new Label
             {
                 Text = $"Q{question.Id}. {question.Question}",
                 Font = QuestionFont,
                 ForeColor = ColTextPri,
                 Location = new Point(CardPad, cy),
-                Size = new Size(innerW, questionLabelH),
+                Size = new Size(innerW, questionH),
                 BackColor = Color.Transparent,
                 TabStop = false,
-                // AutoSize = false + fixed width + no height clamp = word-wraps freely
-            };
-            card.Controls.Add(qLabel);
-            cy += questionLabelH + 4;
+            });
+            cy += questionH;
 
             // ── Hint ──────────────────────────────────────────────────────────
-            if (!string.IsNullOrEmpty(question.Hint))
+            if (hintH > 0)
             {
-                var hint = new Label
+                card.Controls.Add(new Label
                 {
                     Text = question.Hint,
-                    Font = new Font("Segoe UI", 8f),
+                    Font = HintFont,
                     ForeColor = ColTextSec,
                     Location = new Point(CardPad, cy),
-                    Size = new Size(innerW, 14),
+                    Size = new Size(innerW, hintH),
                     BackColor = Color.Transparent,
                     TabStop = false,
-                };
-                card.Controls.Add(hint);
-                cy += 16;
+                });
+                cy += hintH;
             }
 
             // ── Suggested values ──────────────────────────────────────────────
-            if (question.SuggestedValues != null && question.SuggestedValues.Length > 0)
+            if (suggH > 0)
             {
-                var sugg = new Label
+                card.Controls.Add(new Label
                 {
-                    Text = "Suggestions: " + string.Join("  ·  ", question.SuggestedValues),
-                    Font = new Font("Segoe UI", 8f, FontStyle.Bold),
+                    Text = suggText,
+                    Font = SuggFont,
                     ForeColor = ColAccent,
                     Location = new Point(CardPad, cy),
-                    Size = new Size(innerW, 14),
+                    Size = new Size(innerW, suggH),
                     BackColor = Color.Transparent,
                     TabStop = false,
-                };
-                card.Controls.Add(sugg);
-                cy += 16;
+                });
+                cy += suggH;
             }
 
             // ── Answer input ──────────────────────────────────────────────────
@@ -306,9 +316,11 @@ namespace CopilotAddIn
             inputContainer.Paint += (s, e) =>
             {
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                var r = new Rectangle(0, 0, inputContainer.Width - 1, inputContainer.Height - 1);
                 using (var pen = new Pen(ColBorder, 1f))
-                    DrawRoundRect(e.Graphics, pen, r, 6);
+                    DrawRoundRect(e.Graphics, pen,
+                        new Rectangle(0, 0,
+                            inputContainer.Width - 1,
+                            inputContainer.Height - 1), 6);
             };
 
             var textBox = new TextBox
