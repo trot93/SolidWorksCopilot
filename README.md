@@ -2,6 +2,7 @@
 
 # SolidWorks AI Copilot
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![.NET Framework 4.8](https://img.shields.io/badge/.NET%20Framework-4.8-blue)](https://dotnet.microsoft.com/download/dotnet-framework/net48)
 [![SolidWorks](https://img.shields.io/badge/SolidWorks-2024+-red)](https://www.solidworks.com/)
 
