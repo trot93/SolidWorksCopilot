@@ -103,6 +103,13 @@ namespace CopilotModels
 
         [JsonIgnore]
         public bool IsPlainText { get; set; }
+
+        /// <summary>
+        /// SPRINT 3: Set by AiClient when geometry lock succeeds.
+        /// MainTaskPane reads this directly — no shared logger dependency.
+        /// </summary>
+        [JsonIgnore]
+        public string GeometryLockJson { get; set; }
     }
 
     public class StepData
@@ -122,24 +129,63 @@ namespace CopilotModels
         [JsonProperty("summary_line")]
         public string SummaryLine { get; set; }
 
-        [JsonProperty("step_rationale")]
-        public string StepRationale { get; set; }
+        // SPRINT 3: Removed StepRationale — saves tokens, removed from JSON schema too.
+        // Legacy [Obsolete] why_* fields below are sufficient for any backward-compat reads.
 
-        [JsonProperty("risk")]
-        public string Risk { get; set; }
+        [JsonProperty("confidence")]
+        public string Confidence { get; set; }
+
+        // SPRINT 3: Execution tracking fields
+        [JsonIgnore]
+        public bool IsLocked { get; set; }
+
+        [JsonIgnore]
+        public ExecutionStatus Status { get; set; } = ExecutionStatus.Pending;
+
+        [JsonIgnore]
+        public string UserFeedback { get; set; }
 
         // Legacy fields retained for backward compatibility
-        [Obsolete("Use StepRationale instead")]
+        [Obsolete("Use step instructions instead")]
         [JsonProperty("why_geometric")]
         public string WhyGeometric { get; set; }
 
-        [Obsolete("Use StepRationale instead")]
+        [Obsolete("Use step instructions instead")]
         [JsonProperty("why_functional")]
         public string WhyFunctional { get; set; }
 
-        [Obsolete("Use StepRationale instead")]
+        [Obsolete("Use step instructions instead")]
         [JsonProperty("why_manufacturing")]
         public string WhyManufacturing { get; set; }
+    }
+
+    // SPRINT 3: Step execution lifecycle enum
+    public enum ExecutionStatus
+    {
+        Pending,    // not yet executed
+        Completed,  // user confirmed done
+        Failed,     // user flagged as wrong
+        Discarded   // auto-invalidated because a prior step failed
+    }
+
+    // SPRINT 3: Rolling window session state — lives here instead of a separate class
+    // to keep the model layer self-contained. Replaces the proposed GenerationSession.cs.
+    public class RollingWindowState
+    {
+        /// <summary>Full GeometryLock JSON from Sprint 2 pipeline — immutable for the session.</summary>
+        public string GeometryLockJson { get; set; }
+
+        /// <summary>All steps confirmed complete so far. Prompt injection uses last 2 only.</summary>
+        public List<StepData> CompletedSteps { get; set; } = new List<StepData>();
+
+        /// <summary>Batch index (0 = steps 1–2, 1 = steps 3–4, …).</summary>
+        public int CurrentBatchIndex { get; set; }
+
+        /// <summary>Most recent WorkspaceScanner output JSON — updated after every scan.</summary>
+        public string LastScanResultJson { get; set; }
+
+        /// <summary>True when all feature_sequence items have been generated and completed.</summary>
+        public bool IsComplete { get; set; }
     }
 
     public class AlternativeData

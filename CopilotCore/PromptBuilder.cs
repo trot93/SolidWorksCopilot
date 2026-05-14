@@ -42,6 +42,8 @@ STEP 1 — Before writing any steps, complete design_logic:
   - Define origin (0,0,0) explicitly.
   - Calculate ALL hole/slot X/Y centers relative to origin BEFORE writing instructions.
 ") +
+                // SPRINT 3: Removed ""step_rationale"" from schema — saves tokens per batch,
+                // reduces UI clutter. The geometry lock and instructions carry the full intent.
                 @"
 OUTPUT SCHEMA (exact):
 {
@@ -65,8 +67,6 @@ OUTPUT SCHEMA (exact):
         ""Add constraints: [list each one]."",
         ""Apply feature: [exact parameter values].""
       ],
-      ""step_rationale"": ""One sentence: how this feature serves the design goal."",
-      ""risk"": ""Known failure mode, or null.""
     }
   ],
   ""confidence"": ""high|medium|low""
@@ -77,7 +77,8 @@ HARD RULES:
 2. First sketch must reference the defined origin with a Fix or Coincident constraint.
 3. All depth/radius/diameter values must be positive numbers.
 4. Maximum 8 steps. If the design needs more, complete the primary structure first.
-5. Do not invent dimensions outside what is defined in the geometry lock or goal.";
+5. Do not invent dimensions outside what is defined in the geometry lock or goal.
+6. NEVER use Infinity, -Infinity, NaN, or null for numeric fields — use 0 if a value is unknown.";
 
             var bounds = DeriveBounds(context);
 
@@ -202,9 +203,13 @@ RULES:
 2. Origin: define (0,0,0) explicitly — which corner, which face, which edge.
 3. Pre-calculate EVERY dimension modelling will need: wall thicknesses, hole diameters,
    hole centre X/Y relative to origin, fillet radii, slot widths. Show the arithmetic.
+   CRITICAL: Distinguish sketch dimensions (profile size) from extrusion depth.
+   e.g. for a bracket leg: sketch_length=50mm (profile), extrusion_depth=3mm (thickness).
+   Never assign thickness values to depth_mm unless the extrusion direction IS the thickness.
 4. Feature sequence: build order with feature name and plane. No instructions yet.
 5. Any dimension from engineering defaults must appear in flags[].
 6. If image_analysis listed contradictions, record how each was resolved.
+7. feature_sequence is MANDATORY — every feature that will be modelled must appear here in build order. This array drives the step-by-step execution loop. Never omit it.
 
 OUTPUT SCHEMA (exact):
 {
@@ -317,7 +322,9 @@ DO ASK ABOUT:
 
 Extract all confirmed specs from text and image into resolved_context.
 If text + image together give sufficient context: needs_clarification=false.
-When asking: maximum 2-3 questions, specific to THIS design.
+If image is provided and answers the question — do NOT ask it. Image evidence overrides assumptions.
+When asking: maximum 2 questions, only for critical gaps neither text nor image resolved.
+NEVER claim the image is missing if image_analysis is present in the payload.
 
 SCHEMA:
 {
@@ -349,6 +356,146 @@ SCHEMA:
                 };
 
             var userContent = JsonConvert.SerializeObject(userPayload, Formatting.None);
+            return JsonConvert.SerializeObject(new { system = systemPrompt, user = userContent });
+        }
+
+        // ── SPRINT 3: Rolling Window Batch Prompt ─────────────────────────────
+        //
+        // Called by AiClient.GenerateBatchAsync() for every 2-step generation.
+        // Also handles regeneration scenarios:
+        //   userFeedback != null + regenerateBothSteps=false → Scenario B (step 2 only)
+        //   userFeedback != null + regenerateBothSteps=true  → Scenario C (both steps)
+
+        public static string BuildBatchPrompt(
+            RollingWindowState state,
+            string[] remainingSequence,
+            string userFeedback = null,
+            bool regenerateBothSteps = false)
+        {
+            bool isRegeneration = !string.IsNullOrEmpty(userFeedback);
+            int stepsToGenerate = regenerateBothSteps || remainingSequence.Length >= 2 ? 2 : 1;
+
+            // Clamp to what's actually remaining
+            stepsToGenerate = Math.Min(stepsToGenerate, remainingSequence.Length);
+
+            // Last 2 completed steps only — token efficiency, scan covers full current state
+            var recentCompleted = state.CompletedSteps
+                .Skip(Math.Max(0, state.CompletedSteps.Count - 2))
+                .Select(s => new { s.Feature, s.Plane, s.SummaryLine })
+                .ToArray();
+
+            var taskDescription = isRegeneration
+                ? (regenerateBothSteps
+                    ? $"Step 1 ({remainingSequence[0]}) failed. Regenerate BOTH Step 1 AND Step 2."
+                    : $"Step 2 ({remainingSequence[0]}) failed. Regenerate Step 2 ONLY. Step 1 is locked and correct.")
+                : $"Generate the next {stepsToGenerate} step(s): " +
+                  string.Join(" and ", remainingSequence.Take(stepsToGenerate));
+
+            var systemPrompt =
+                $"You are a SOLIDWORKS CAD engineer generating the next steps in an active design session.\n" +
+                $"The user is executing steps in real SolidWorks as you generate them.\n" +
+                $"Generate ONLY {stepsToGenerate} step(s). Do not plan beyond what is asked.\n" +
+                "Return ONLY valid JSON — no markdown, no code fences.\n\n" +
+                // SPRINT 3: Removed step_rationale from batch schema — not needed,
+                // saves ~100 tokens per batch call.
+                @"OUTPUT SCHEMA (exact):
+{
+  ""steps"": [
+    {
+      ""feature"": ""Extrude|Cut-Extrude|Fillet|Chamfer|Hole|Shell|Revolve|LinearPattern|CircularPattern"",
+      ""plane"": ""Front Plane|Top Plane|Right Plane|<named plane>"",
+      ""parameters"": { ""depth_mm"": 10.0, ""end_condition"": ""blind"", ""is_cut"": false },
+      ""instructions"": [
+        ""Select [plane] as sketch plane."",
+        ""Draw [shape] at [exact X,Y mm] from origin."",
+        ""Add constraints: [list each]."",
+        ""Apply feature: [exact parameter values].""
+      ],
+      ""summary_line"": ""One-line description of what this step produces."",
+      ""confidence"": ""high|medium|low"",
+    }
+  ]
+}
+
+HARD RULES:
+1. Reference ONLY features that exist in ACTUAL CURRENT STATE — never assume a feature exists.
+2. All dimensions MUST come from GEOMETRY LOCK — do not invent new values.
+3. Use actual SolidWorks feature names from ACTUAL CURRENT STATE when referencing existing geometry.
+4. Never exceed the requested step count.
+5. NEVER use Infinity, -Infinity, NaN, or null for numeric fields — use 0 if a value is unknown.";
+
+            var userPayload = new
+            {
+                geometry_lock = JsonConvert.DeserializeObject(state.GeometryLockJson ?? "{}"),
+                actual_current_state = JsonConvert.DeserializeObject(state.LastScanResultJson ?? "{\"feature_count\":0,\"features\":[]}"),
+                last_completed_steps = recentCompleted,
+                remaining_features = remainingSequence,
+                user_correction = isRegeneration ? userFeedback : null,
+                task = taskDescription
+            };
+
+            var userContent = JsonConvert.SerializeObject(userPayload, Formatting.Indented);
+            return JsonConvert.SerializeObject(new { system = systemPrompt, user = userContent });
+        }
+
+        // ── SPRINT 3: Single Step Regeneration Prompt (Scenario B) ────────────
+        //
+        // Used when Step 1 is locked/correct and only Step 2 needs regeneration.
+        // Passes the locked step explicitly so the model knows exactly what preceded it.
+
+        public static string BuildSingleStepRegenerationPrompt(
+            RollingWindowState state,
+            StepData lockedStep,
+            string failedStepBrief,
+            string userFeedback)
+        {
+            var systemPrompt =
+                "You are a SOLIDWORKS CAD engineer correcting a single failed step.\n" +
+                "Step 1 is LOCKED and correct — do NOT change it.\n" +
+                "Regenerate Step 2 ONLY based on the user correction and real workspace state.\n" +
+                "Return ONLY valid JSON — no markdown, no code fences.\n\n" +
+                @"OUTPUT SCHEMA (exact):
+{
+  ""steps"": [
+    {
+      ""feature"": ""Extrude|Cut-Extrude|Fillet|Chamfer|Hole|Shell|Revolve|LinearPattern|CircularPattern"",
+      ""plane"": ""Front Plane|Top Plane|Right Plane|<named plane>"",
+      ""parameters"": { ""depth_mm"": 10.0, ""end_condition"": ""blind"", ""is_cut"": false },
+      ""instructions"": [
+        ""Select [plane] as sketch plane."",
+        ""Draw [shape] at [exact X,Y mm] from origin."",
+        ""Add constraints: [list each]."",
+        ""Apply feature: [exact parameter values].""
+      ],
+      ""summary_line"": ""One-line description of what this step produces."",
+      ""confidence"": ""high|medium|low"",
+    }
+  ]
+}
+
+HARD RULES:
+1. Generate exactly 1 step (Step 2 replacement only).
+2. Reference ONLY features that exist in ACTUAL CURRENT STATE.
+3. All dimensions MUST come from GEOMETRY LOCK.
+4. The locked Step 1 provides context — build on it, do not redo it.";
+
+            var userPayload = new
+            {
+                geometry_lock = JsonConvert.DeserializeObject(state.GeometryLockJson ?? "{}"),
+                actual_current_state = JsonConvert.DeserializeObject(
+                    state.LastScanResultJson ?? "{\"feature_count\":0,\"features\":[]}"),
+                locked_step_1 = new
+                {
+                    lockedStep.Feature,
+                    lockedStep.Plane,
+                    lockedStep.SummaryLine
+                },
+                failed_step_2_brief = failedStepBrief,
+                user_correction = userFeedback,
+                task = $"Regenerate Step 2 ({failedStepBrief}) only. Step 1 is complete and locked."
+            };
+
+            var userContent = JsonConvert.SerializeObject(userPayload, Formatting.Indented);
             return JsonConvert.SerializeObject(new { system = systemPrompt, user = userContent });
         }
 

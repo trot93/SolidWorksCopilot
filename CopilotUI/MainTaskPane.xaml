@@ -3,6 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:local="clr-namespace:CopilotUI"
              mc:Ignorable="d"
              d:DesignHeight="900" d:DesignWidth="320"
              Background="#F8F8F5"
@@ -140,20 +141,11 @@
                     <TextBlock Text="Design Goal" FontSize="11" FontWeight="SemiBold"
                                Foreground="#444441" Margin="0,0,0,6"/>
 
-                    <!--
-                        Height=100 gives 72px text area + 28px toolbar (attach button).
-                        The WinForms GoalInputOverlay is parented here by TaskPaneManager.
-                    -->
                     <Border x:Name="GoalInputPlaceholder"
                             Height="100"
                             Background="Transparent"
                             BorderThickness="0"/>
 
-                    <!--
-                        Sprint 2: Image badge — shown by SetImageAttached(true).
-                        Purely informational; the attach/clear actions live in the
-                        WinForms toolbar inside GoalInputOverlay.
-                    -->
                     <Border x:Name="ImageBadge"
                             Visibility="Collapsed"
                             Background="#E6F1FB"
@@ -188,8 +180,7 @@
                 <Border x:Name="ClarificationPlaceholder"
                         Height="400"
                         Background="Transparent"
-                        BorderThickness="0"
-                        Margin="0,0,0,0"/>
+                        BorderThickness="0"/>
             </Border>
 
             <!-- ── Status bar ─────────────────────────────────────────────── -->
@@ -217,7 +208,7 @@
             </Border>
 
             <!-- ── Step list ──────────────────────────────────────────────── -->
-            <StackPanel x:Name="StepListPanel" Margin="0,4,0,8">
+            <StackPanel x:Name="StepListPanel" Margin="0,4,0,0">
                 <Border x:Name="EmptyState" Margin="12,20,12,0" Padding="16"
                         Background="White" BorderBrush="#DADAD5" BorderThickness="1" CornerRadius="8">
                     <StackPanel HorizontalAlignment="Center">
@@ -240,9 +231,15 @@
                 </Border>
             </StackPanel>
 
+            <!-- ── SPRINT 3: BatchControlBar — shown after first batch is generated ── -->
+            <local:BatchControlBar x:Name="BatchBar" 
+                       Visibility="Collapsed"
+                       Margin="0,4,0,0"/>
+
             <!-- ── Error panel ────────────────────────────────────────────── -->
             <Border x:Name="ErrorPanel" Background="#FFF5F5" BorderBrush="#F09595"
-                    BorderThickness="0,1,0,0" Padding="12,10" Visibility="Collapsed">
+                    BorderThickness="0,1,0,0" Padding="12,10" Visibility="Collapsed"
+                    Margin="0,4,0,8">
                 <StackPanel>
                     <Grid Margin="0,0,0,6">
                         <Grid.ColumnDefinitions>

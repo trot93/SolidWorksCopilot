@@ -69,11 +69,15 @@ namespace CopilotAddIn
             _scrollPanel = new Panel
             {
                 Dock = DockStyle.Fill,
-                AutoScroll = false,
+                AutoScroll = true,          // ← FIX: enable vertical scrolling
                 BackColor = ColBackground,
             };
-            Controls.Add(_scrollPanel);
 
+            // Rebuild content whenever the panel's usable width changes
+            // (e.g. when the vertical scrollbar appears/disappears).
+            _scrollPanel.ClientSizeChanged += (s, e) => BuildContent();
+
+            Controls.Add(_scrollPanel);
             BuildContent();
         }
 
@@ -81,7 +85,8 @@ namespace CopilotAddIn
 
         private void BuildContent()
         {
-            int w = _scrollPanel.Width > 0 ? _scrollPanel.Width : 300;
+            // Use ClientSize.Width so the scrollbar's own width is already excluded.
+            int w = _scrollPanel.ClientSize.Width > 0 ? _scrollPanel.ClientSize.Width : 300;
             if (w == _lastBuiltWidth) return;
             _lastBuiltWidth = w;
 
@@ -199,12 +204,8 @@ namespace CopilotAddIn
             _calculatedHeight = y + 6 + 34 + 8;
         }
 
-        protected override void OnLayout(LayoutEventArgs e)
-        {
-            base.OnLayout(e);
-            if (_scrollPanel != null)
-                BuildContent();
-        }
+        // OnLayout removed — ClientSizeChanged on _scrollPanel handles rebuilds
+        // reliably and avoids double-build loops that the old override caused.
 
         /// <summary>
         /// Measures text height at a fixed width using TextRenderer (matches GDI rendering).

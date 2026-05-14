@@ -30,7 +30,7 @@ namespace CopilotCore
         //     Vision: yes. Reasoning: yes (built-in thinking mode).
         //
         //   REASONING MODEL — deepseek/deepseek-v3.2
-        //     Used for: geometry lock, step generation, verification
+        //     Used for: geometry lock, step generation, verification, batch generation
         //     Why: strongest reasoning at this price point (~90% of GPT-5 quality)
         //     Cost: $0.252/M input, $0.378/M output
         //     Vision: NO — never send raw images to this model.
@@ -44,10 +44,10 @@ namespace CopilotCore
         // while keeping vision tasks on the cheapest capable model.
         // Total cost per session with image: ~$0.001. Without image: ~$0.0008.
 
-        private const string OpenRouterVisionModel = "qwen/qwen3.5-flash-02-23";      // image extraction + clarification
-        private const string OpenRouterReasoningModel = "deepseek/deepseek-v3.2";        // geometry lock + generation + verify
-        private const string OpenRouterFallbackModel = "google/gemma-4-31b-it:free";    // fallback on 429/404
-        private const string OpenRouterLastResort = "openrouter/auto";               // last resort — never 404s
+        private const string OpenRouterVisionModel = "qwen/qwen3.5-flash-02-23";    // image extraction + clarification
+        private const string OpenRouterReasoningModel = "deepseek/deepseek-v3.2";      // geometry lock + generation + verify + batch
+        private const string OpenRouterFallbackModel = "google/gemma-4-31b-it:free";  // fallback on 429/404
+        private const string OpenRouterLastResort = "openrouter/auto";             // last resort — never 404s
 
         private const string ClarifyModelAnthropic = "claude-3-haiku-20240307";
         private const string ClarifyModelOpenAI = "gpt-4o-mini";
@@ -147,7 +147,7 @@ namespace CopilotCore
                     forceModel: visionModel,
                     imageBase64: imageBase64,
                     imageMediaType: imageMediaType,
-                    maxTokens: 512);   // extraction output is small — schema has ~10 fields
+                    maxTokens: 512);
 
                 if (string.IsNullOrEmpty(rawText))
                 {
@@ -155,10 +155,8 @@ namespace CopilotCore
                     return null;
                 }
 
-                // Validate it's usable JSON before passing downstream
                 try
                 {
-                    // Strip markdown fences if model added them despite instructions
                     rawText = rawText.Trim();
                     if (rawText.StartsWith("```"))
                     {
@@ -170,12 +168,11 @@ namespace CopilotCore
                     }
                     int js = rawText.IndexOf('{'), je = rawText.LastIndexOf('}');
                     if (js >= 0 && je > js) rawText = rawText.Substring(js, je - js + 1);
+                    rawText = SanitizeJson(rawText);
 
-                    JObject.Parse(rawText); // throws if invalid
+                    JObject.Parse(rawText);
                     logger?.LogApiResponse("ImageExtract", rawText);
 
-                    // If model flagged the image adds no useful info, return null
-                    // so downstream treats it as no-image session
                     var parsed = JObject.Parse(rawText);
                     bool addsInfo = parsed["adds_useful_info"]?.ToObject<bool>() ?? true;
                     if (!addsInfo)
@@ -201,7 +198,7 @@ namespace CopilotCore
 
         // ── Clarification ─────────────────────────────────────────────────────
         //
-        // Now receives imageContext (structured JSON) instead of raw image.
+        // Receives imageContext (structured JSON) instead of raw image.
         // The clarification model does not need vision capability.
         // Three-layer hierarchy (text > image facts > gaps) enforced in prompt.
 
@@ -209,26 +206,21 @@ namespace CopilotCore
             string designGoal,
             string imageBase64 = null,
             string imageMediaType = null,
-            string imageContext = null)   // structured JSON from ExtractImageContextAsync
+            string imageContext = null)
         {
             try
             {
                 bool hasImg = !string.IsNullOrEmpty(imageBase64);
-                bool hasImgContext = !string.IsNullOrEmpty(imageContext);
 
-                // Build clarification prompt with image context as structured text.
-                // Raw image is NOT passed to clarification — facts already extracted.
                 var promptJson = PromptBuilder.BuildClarificationPrompt(
                     designGoal,
                     hasImage: hasImg,
                     imageContext: imageContext);
 
-                // Clarification uses the vision model (cheap, fast) but without
-                // raw image — the model reads extracted JSON facts as text.
                 var rawText = await CallLLMRawAsync(
                     promptJson,
                     forceModel: GetVisionModel(),
-                    imageBase64: null,           // no raw image — facts are in the prompt text
+                    imageBase64: null,
                     imageMediaType: null,
                     maxTokens: 512);
 
@@ -297,9 +289,9 @@ namespace CopilotCore
         {
             switch (provider)
             {
-                case "anthropic": return ClarifyModelAnthropic;      // haiku has vision
-                case "openrouter": return OpenRouterVisionModel;       // qwen3.5-flash
-                case "openai": return ClarifyModelOpenAI;         // gpt-4o-mini has vision
+                case "anthropic": return ClarifyModelAnthropic;
+                case "openrouter": return OpenRouterVisionModel;
+                case "openai": return ClarifyModelOpenAI;
                 default: return ClarifyModelAnthropic;
             }
         }
@@ -308,8 +300,8 @@ namespace CopilotCore
         {
             switch (provider)
             {
-                case "anthropic": return "claude-3-5-haiku-20241022"; // acceptable reasoning for anthropic path
-                case "openrouter": return OpenRouterReasoningModel;    // deepseek-v3.2
+                case "anthropic": return "claude-3-5-haiku-20241022";
+                case "openrouter": return OpenRouterReasoningModel;
                 case "openai": return "gpt-4o";
                 default: return "claude-3-5-haiku-20241022";
             }
@@ -322,33 +314,29 @@ namespace CopilotCore
         //   [Step 1] GeometryLock             — if empty workspace, pins all dimensions
         //   [Step 2] ModeA generation         — writes instructions from locked geometry
         //   [Step 3] Verify                   — JSON consistency check
-        //
-        // imageContext is the output of Step 0, passed in from the caller (UI layer).
-        // This keeps the public API clean — caller controls when extraction runs.
 
         public async Task<AiResponse> GenerateStepsAsync(
             WorkspaceContext context,
             string clarificationAnswers = null,
             string resolvedContext = null,
-            string imageContext = null)   // structured JSON from ExtractImageContextAsync
+            string imageContext = null)
         {
             string geometryLock = null;
 
-            bool isEmptyWorkspace = context.Features == null || context.Features.Count < 2;
+            // SPRINT 3 FIX: Always run geometry lock on first generation (no active session).
+            // Previous guard (isEmptyWorkspace) prevented lock on non-empty workspaces,
+            // meaning rolling window never activated when any features existed.
+            bool shouldRunLock = logger?.CurrentSession == null;
 
-            if (isEmptyWorkspace)
+            if (shouldRunLock)
             {
-                logger?.LogApiCall("GeometryLock", "Empty workspace — running geometry lock");
+                logger?.LogApiCall("GeometryLock", "Running geometry lock — no active session");
 
-                // Geometry lock uses reasoning model — no image passed, facts are in imageContext
                 var lockRaw = await CallLLMRawAsync(
                     PromptBuilder.BuildGeometryLockPrompt(
-                        context,
-                        clarificationAnswers,
-                        resolvedContext,
-                        imageContext),          // structured image facts injected here
+                        context, clarificationAnswers, resolvedContext, imageContext),
                     forceModel: GetReasoningModel(),
-                    imageBase64: null,        // NO raw image — reasoning model doesn't need it
+                    imageBase64: null,
                     imageMediaType: null,
                     maxTokens: 1024);
 
@@ -356,7 +344,6 @@ namespace CopilotCore
                 {
                     try
                     {
-                        // Clean fences if present
                         lockRaw = lockRaw.Trim();
                         if (lockRaw.StartsWith("```"))
                         {
@@ -369,9 +356,13 @@ namespace CopilotCore
                         int js = lockRaw.IndexOf('{'), je = lockRaw.LastIndexOf('}');
                         if (js >= 0 && je > js) lockRaw = lockRaw.Substring(js, je - js + 1);
 
+                        lockRaw = SanitizeJson(lockRaw);
                         JObject.Parse(lockRaw);
                         geometryLock = lockRaw;
                         logger?.LogApiResponse("GeometryLock", lockRaw);
+                        // SPRINT 3: Store lock in session so MainTaskPane can read it
+                        // to bootstrap the rolling window after GenerateStepsAsync returns.
+                        logger?.InitialiseSession(lockRaw);
                     }
                     catch
                     {
@@ -385,13 +376,26 @@ namespace CopilotCore
                 }
             }
 
-            // Generation uses reasoning model — no raw image passed here.
-            // Image facts are embedded in geometryLock (empty workspace path)
-            // or were never needed (populated workspace path).
+            // SPRINT 3: If geometry lock was produced and InitialiseSession was called,
+            // skip ModeA full generation entirely — MainTaskPane will call GenerateBatchAsync
+            // in 2-step batches instead. Return a signal response with no steps so
+            // MainTaskPane knows to switch to rolling window mode.
+            if (!string.IsNullOrEmpty(geometryLock))
+            {
+                logger?.LogApiCall("ModeA", "Skipped — rolling window will handle batch generation");
+                return new AiResponse
+                {
+                    GeometryLockJson = geometryLock,  // direct field — no shared logger dependency
+                    RawResponse = geometryLock,
+                    Confidence = "high"
+                };
+            }
+
+            // Non-rolling-window path (populated workspace, no geometry lock)
             var response = await CallLLMAsync(
                 PromptBuilder.BuildModeAPrompt(context, clarificationAnswers, resolvedContext, geometryLock),
                 "ModeA",
-                imageBase64: null,           // NO raw image to generation call
+                imageBase64: null,
                 imageMediaType: null,
                 isGeneration: true,
                 forceModel: GetReasoningModel());
@@ -427,6 +431,53 @@ namespace CopilotCore
                 isGeneration: true,
                 forceModel: GetReasoningModel());
 
+        // ── SPRINT 3: Rolling Window Batch Generation ─────────────────────────
+        //
+        // Called by MainTaskPane for every 2-step batch in the rolling window loop.
+        // Also handles regeneration:
+        //   userFeedback != null + regenerateBothSteps=false → Scenario B (step 2 only)
+        //   userFeedback != null + regenerateBothSteps=true  → Scenario C (both steps)
+        //
+        // Uses reasoning model — geometry lock already contains image context from Sprint 2.
+        // No raw image is ever passed to this call.
+
+        public async Task<AiResponse> GenerateBatchAsync(
+            RollingWindowState state,
+            string[] remainingSequence,
+            string userFeedback = null,
+            bool regenerateBothSteps = false)
+        {
+            var promptJson = PromptBuilder.BuildBatchPrompt(
+                state, remainingSequence, userFeedback, regenerateBothSteps);
+
+            var response = await CallLLMAsync(
+                promptJson,
+                "Batch",
+                forceModel: GetReasoningModel(),
+                isGeneration: true);
+
+            // SPRINT 3: Batch calls must return exactly 1 or 2 steps — reject anything else.
+            if (response.Steps != null && !ValidateStepSchema(response, isBatch: true))
+            {
+                int expected = Math.Min(remainingSequence.Length, regenerateBothSteps || remainingSequence.Length >= 2 ? 2 : 1);
+                logger?.LogError($"Batch schema validation failed — expected {expected} step(s), retrying...", null);
+
+                response = await CallLLMAsync(
+                    promptJson,
+                    "Batch_Retry",
+                    forceModel: GetReasoningModel(),
+                    isGeneration: true);
+
+                if (response.Steps != null && !ValidateStepSchema(response, isBatch: true))
+                {
+                    response.Error = "Batch generation failed schema validation after retry.";
+                    return response;
+                }
+            }
+
+            return response;
+        }
+
         // ── Verification ──────────────────────────────────────────────────────
 
         private async Task<AiResponse> VerifyStepsAsync(AiResponse draft, WorkspaceContext context)
@@ -442,7 +493,6 @@ namespace CopilotCore
                 })
             }.ToString();
 
-            // Verify uses vision model — cheap, fast, sufficient for JSON consistency check
             var verifyResponse = await CallLLMAsync(
                 verifyPrompt, "Verify",
                 forceModel: GetVisionModel(),
@@ -472,7 +522,6 @@ namespace CopilotCore
                 var response = await httpClient.PostAsync(modelEndpoint, content);
                 var responseString = await response.Content.ReadAsStringAsync();
 
-                // Three-tier fallback: 429 = rate limited, 404 = no endpoint
                 if (((int)response.StatusCode == 429 || (int)response.StatusCode == 404) && provider == "openrouter")
                 {
                     string fallback = (int)response.StatusCode == 404
@@ -533,7 +582,6 @@ namespace CopilotCore
                 var response = await httpClient.PostAsync(modelEndpoint, content);
                 var responseString = await response.Content.ReadAsStringAsync();
 
-                // Apply same fallback for raw calls
                 if (((int)response.StatusCode == 429 || (int)response.StatusCode == 404) && provider == "openrouter")
                 {
                     string fallback = (int)response.StatusCode == 404 ? OpenRouterLastResort : OpenRouterFallbackModel;
@@ -573,8 +621,6 @@ namespace CopilotCore
             string sysMsg = prompt["system"]?.ToString() ?? "You are an expert SOLIDWORKS engineer. Return ONLY JSON.";
             string usrMsg = prompt["user"]?.ToString() ?? string.Empty;
 
-            // Model fallback chain inside BuildRequestBody is just for the default —
-            // all real calls pass forceModel explicitly.
             string selectedModel = forceModel
                                    ?? (provider == "openrouter" ? OpenRouterReasoningModel :
                                        provider == "anthropic" ? "claude-3-5-haiku-20241022" :
@@ -586,7 +632,7 @@ namespace CopilotCore
             // Token budget:
             // Clarify / Verify / ImageExtract: 512  — small structured JSON output
             // GeometryLock:                    1024 — moderate schema
-            // Generation:                      4096 — full multi-step output
+            // Generation / Batch:              4096 — full multi-step output
             int maxTokens = overrideMaxTokens ?? (isGeneration ? 4096 : 512);
 
             if (provider == "anthropic")
@@ -661,10 +707,27 @@ namespace CopilotCore
 
         // ── Response parsing ──────────────────────────────────────────────────
 
+        // ── JSON sanitizer ────────────────────────────────────────────────────
+        // Newtonsoft.Json rejects bare Infinity/-Infinity/NaN values (not valid JSON).
+        // Some models emit these for open-ended numeric fields — replace with 0.
+        private static string SanitizeJson(string json)
+        {
+            if (string.IsNullOrEmpty(json)) return json;
+            // Order matters: -Infinity before Infinity
+            json = System.Text.RegularExpressions.Regex.Replace(
+                json, @"(?<=[:\[,\s])-Infinity(?=[,}\]\s])", "0");
+            json = System.Text.RegularExpressions.Regex.Replace(
+                json, @"(?<=[:\[,\s])Infinity(?=[,}\]\s])", "0");
+            json = System.Text.RegularExpressions.Regex.Replace(
+                json, @"(?<=[:\[,\s])NaN(?=[,}\]\s])", "0");
+            return json;
+        }
+
         private AiResponse ParseResponse(string json)
         {
             try
             {
+                json = SanitizeJson(json);
                 var root = JObject.Parse(json);
                 var choices = root["choices"];
 
@@ -729,23 +792,35 @@ namespace CopilotCore
             catch { return null; }
         }
 
-        private bool ValidateStepSchema(AiResponse response)
+        // SPRINT 3: isBatch=true enforces a hard cap of 1–2 steps.
+        // step_rationale removed from validation — no longer in schema.
+        private bool ValidateStepSchema(AiResponse response, bool isBatch = false)
         {
             if (response.Steps == null || response.Steps.Length == 0) return false;
-            var valid = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+
+            // SPRINT 3: Batch calls must return exactly 1 or 2 steps — reject anything else.
+            if (isBatch && response.Steps.Length > 2)
             {
-                "Extrude","Cut-Extrude","Fillet","Chamfer","Shell",
-                "Revolve","Hole","LinearPattern","CircularPattern","Sweep","Loft"
+                logger?.LogError($"Batch returned {response.Steps.Length} steps — expected 1 or 2", null);
+                return false;
+            }
+
+            var validFeatures = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "Extrude", "Cut-Extrude", "Fillet", "Chamfer", "Shell",
+                "Revolve", "Hole", "LinearPattern", "CircularPattern", "Sweep", "Loft"
             };
+
             foreach (var step in response.Steps)
             {
-                if (string.IsNullOrEmpty(step.Feature) || !valid.Contains(step.Feature)) return false;
+                if (string.IsNullOrEmpty(step.Feature) || !validFeatures.Contains(step.Feature)) return false;
                 if (step.Instructions == null || step.Instructions.Length < 1) return false;
                 if (step.Parameters != null && step.Parameters.TryGetValue("depth_mm", out var d))
                 {
                     try { if (Convert.ToDouble(d) < 0) return false; } catch { }
                 }
             }
+
             return true;
         }
 

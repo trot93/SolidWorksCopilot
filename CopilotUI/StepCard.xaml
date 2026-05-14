@@ -4,7 +4,7 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              mc:Ignorable="d"
-             d:DesignHeight="220" d:DesignWidth="300"
+             d:DesignHeight="200" d:DesignWidth="300"
              FontFamily="Segoe UI">
 
     <Border x:Name="CardBorder"
@@ -15,6 +15,7 @@
             Margin="8,4,8,0">
         <StackPanel>
 
+            <!-- ── Header row: step number badge + feature name + confidence ── -->
             <Grid Margin="12,10,12,0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -56,6 +57,7 @@
                 </Border>
             </Grid>
 
+            <!-- ── Summary line ── -->
             <TextBlock x:Name="SummaryText"
                        Margin="42,4,12,0"
                        FontSize="11"
@@ -63,6 +65,7 @@
                        FontStyle="Italic"
                        TextWrapping="Wrap"/>
 
+            <!-- ── Instructions panel ── -->
             <Border x:Name="InstructionsPanel"
                     Background="#F0F4FA"
                     BorderBrush="#C8D8EE"
@@ -93,56 +96,19 @@
                     </ItemsControl>
                 </StackPanel>
             </Border>
-
-            <Expander Margin="12,4,12,0" Padding="0" BorderThickness="0" Background="Transparent">
-                <Expander.Header>
-                    <TextBlock Text="View Detailed Rationale" FontSize="10" Foreground="#185FA5" Cursor="Hand"/>
-                </Expander.Header>
-                <Border Background="#F8F8F5" CornerRadius="6" Padding="10,8" Margin="0,4,0,0">
-                    <StackPanel>
-                        <TextBlock x:Name="DetailedRationaleText"
-                                   FontSize="11"
-                                   Foreground="#5F5E5A"
-                                   TextWrapping="Wrap"
-                                   LineHeight="16"/>
-
-                        <Border x:Name="RiskPanel"
-                                Background="#FFF5F5"
-                                BorderBrush="#F09595"
-                                BorderThickness="0,1,0,0"
-                                Padding="0,6,0,0"
-                                Margin="0,8,0,0"
-                                Visibility="Collapsed">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="⚠ " Foreground="#A32D2D" FontWeight="Bold"/>
-                                <TextBlock x:Name="RiskText" FontSize="10" Foreground="#A32D2D" TextWrapping="Wrap"/>
-                            </StackPanel>
-                        </Border>
-                    </StackPanel>
-                </Border>
-            </Expander>
-
-            <Border x:Name="ModifiedPanel"
-                    Background="#FFF8E6"
-                    BorderBrush="#F0C040"
-                    BorderThickness="0,1,0,0"
-                    Padding="12,8"
-                    Margin="0,8,0,0"
+            <!-- ── SPRINT 3: Status badge — shown after step is actioned ── -->
+            <Border x:Name="StatusBadge"
+                    CornerRadius="5"
+                    Padding="10,5"
+                    Margin="12,6,12,0"
                     Visibility="Collapsed">
-                <StackPanel>
-                    <TextBlock Text="YOUR MODIFICATION"
-                               FontSize="9"
-                               FontWeight="Bold"
-                               Foreground="#7A5800"
-                               Margin="0,0,0,4"/>
-                    <TextBlock x:Name="ModifiedText"
-                               FontSize="11"
-                               Foreground="#4A3800"
-                               TextWrapping="Wrap"
-                               LineHeight="17"/>
-                </StackPanel>
+                <TextBlock x:Name="StatusText"
+                           FontSize="10"
+                           FontWeight="SemiBold"
+                           HorizontalAlignment="Center"/>
             </Border>
 
+            <!-- ── Action buttons row: Feedback (left) + ✓ Done (right) ── -->
             <Grid Margin="12,8,12,10">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -150,6 +116,7 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
+                <!-- Spacer -->
                 <TextBlock x:Name="StatusIndicator"
                            Grid.Column="0"
                            FontSize="10"
@@ -158,14 +125,15 @@
                            VerticalAlignment="Center"
                            Visibility="Collapsed"/>
 
-                <Button x:Name="ModifyBtn"
+                <!-- Feedback — opens FeedbackDialog so AI can rewrite the step -->
+                <Button x:Name="FeedbackBtn"
                         Grid.Column="1"
-                        Content="Modify"
+                        Content="Feedback"
                         Margin="0,0,6,0"
                         Padding="8,4"
                         FontSize="11"
                         Cursor="Hand"
-                        Click="OnModifyClick">
+                        Click="OnFeedbackClick">
                     <Button.Template>
                         <ControlTemplate TargetType="Button">
                             <Border Background="Transparent" BorderBrush="#DADAD5" BorderThickness="1" CornerRadius="5" Padding="{TemplateBinding Padding}">
@@ -183,22 +151,26 @@
                     </Button.Foreground>
                 </Button>
 
-                <Button x:Name="AcceptBtn"
+                <!-- ✓ Done — user confirms step physically executed in SolidWorks -->
+                <Button x:Name="LockBtn"
                         Grid.Column="2"
-                        Content="✓ Accept"
+                        Content="✓ Done"
                         Padding="10,4"
                         FontSize="11"
                         FontWeight="SemiBold"
                         Cursor="Hand"
-                        Click="OnAcceptClick">
+                        Click="OnLockClick">
                     <Button.Template>
                         <ControlTemplate TargetType="Button">
-                            <Border Background="#185FA5" CornerRadius="5" Padding="{TemplateBinding Padding}">
+                            <Border Background="#2E7D32" CornerRadius="5" Padding="{TemplateBinding Padding}">
                                 <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                             </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter Property="Background" Value="#0C447C"/>
+                                    <Setter Property="Background" Value="#1B5E20"/>
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter Property="Opacity" Value="0.4"/>
                                 </Trigger>
                             </ControlTemplate.Triggers>
                         </ControlTemplate>
@@ -207,6 +179,7 @@
                         <SolidColorBrush Color="White"/>
                     </Button.Foreground>
                 </Button>
+
             </Grid>
 
         </StackPanel>
